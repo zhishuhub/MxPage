@@ -6,8 +6,14 @@ import { ChartNoAxesCombined, ChevronRight, ChevronsUpDown, Info, Palette, Setti
 import { useProfile } from "@/components/settings/profile-store";
 import { UserAvatar } from "@/components/settings/user-profile";
 import { cn } from "@/lib/utils";
+import { ZHISHU_MANAGED_AI } from "@/lib/zhishu/managed";
 
-const links = [
+const links = ZHISHU_MANAGED_AI ? [
+  { href: "/settings/profile", title: "用户中心", icon: UserRound },
+  { href: "/settings/providers", title: "AI 服务", icon: Settings2 },
+  { href: "/settings/appearance", title: "外观设置", icon: Palette },
+  { href: "/settings/about", title: "关于 K图", icon: Info },
+] : [
   { href: "/settings/profile", title: "用户中心", icon: UserRound },
   { href: "/settings/providers", title: "API 配置", icon: Settings2 },
   { href: "/monitor/usage", title: "API 监控", icon: ChartNoAxesCombined },

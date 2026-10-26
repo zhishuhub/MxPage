@@ -151,7 +151,8 @@ export async function createV4DetailRun(projectId: string, raw: unknown, credent
   const heroModelId = input.heroCount ? selectModel(provider.models, "hero") : undefined;
   const imageModelId = input.detailCount ? selectModel(provider.models, "detail") : heroModelId!;
   const providerSnapshot = snapshotProvider(provider);
-  const xhsPromptPack = input.mode === "xhs" ? createXhsPromptPack(project.description || "") : undefined;
+  const ktuSnapshot = (project.modelSnapshot as { ktu?: { aspect?: string } } | null)?.ktu;
+  const xhsPromptPack = input.mode === "xhs" ? createXhsPromptPack(project.description || "", ktuSnapshot ? { platformName: "抖音", aspect: ktuSnapshot.aspect === "9:16" ? "9:16" : "3:4" } : {}) : undefined;
   const checkpoint: V4Checkpoint = { workflowVersion: 4, stage: "PREPARE", images: [], imageReviews: {}, answers: [], attempts: {}, timings: {}, ...(input.mode !== "xhs" ? { promptReview: { revision: 0, pages: [] } } : {}) };
   let run;
   try {
@@ -404,7 +405,7 @@ async function executeV4(runId: string) {
     // Planning includes image input and complete page copy. Responses may send
     // headers early while still generating; allow three minutes for completion.
     if (!plan) plan = await requestOnce("PLAN", requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.planningModelId, schema: requestPlanSchema, system: input.mode === "xhs"
-      ? `${input.xhsPromptPack?.planning || ""}\n你是小红书图文规划模型。只返回 JSON。按用户主题创作标题、正文、3–8个标签和恰好${input.detailCount}张3:4竖版配图的完整文案，全部 sections.kind 为 DETAIL，不生成 HERO。post 包含 title、caption、hashtags、language，遵守用户字数与语言要求；productName 是主题名。不要编造个人经历、事实数据、品牌功效或来源。普通知识/插画创作不需要商品材质、尺寸等参数，contentCoverage 返回空数组，不套用电商详情页八模块。只有确实阻止主题创作的信息才列入 missingFields；无需补充则为空。sections[].copy 写该图可见的完整文字，evidence 只用 evidenceCatalog 内的 ID。`
+      ? `${input.xhsPromptPack?.planning || ""}\n你是${input.xhsPromptPack?.platformName || "小红书"}图文规划模型。只返回 JSON。按用户主题创作标题、正文、3–8个标签和恰好${input.detailCount}张${input.xhsPromptPack?.aspect || "3:4"}竖版配图的完整文案，全部 sections.kind 为 DETAIL，不生成 HERO。post 包含 title、caption、hashtags、language，遵守用户字数与语言要求；productName 是主题名。不要编造个人经历、事实数据、品牌功效或来源。普通知识/插画创作不需要商品材质、尺寸等参数，contentCoverage 返回空数组，不套用电商详情页八模块。只有确实阻止主题创作的信息才列入 missingFields；无需补充则为空。sections[].copy 写该图可见的完整文字，evidence 只用 evidenceCatalog 内的 ID。`
       : `${buildCommerceSystemPrompt(current.platform, ["hero_search", "feature_proof", "lifestyle", "material_closeup", "specification", "trust", "summary"])}\n你是商品规划模型。只返回 JSON。写出有证据的商品事实、买家价值和完整的逐屏内容；未知字段放入 missingFields，不要设计字体、背景或工具调用。sections[].copy 是最终需要呈现的完整文案，包含标题、解释、标签与已知参数，每条独立文案换行，不写Markdown装饰或制作说明，不用只有标题的提纲代替内容。\n${input.detailCount === 0 ? coverageRules : "完整详情任务的 contentCoverage 逐项交代八类内容：covered 必须引用真实承载该内容的详情页下标（全套从0开始，不能只引用HERO）；needs_input 写明具体缺失资料；not_applicable 写明产品或用户范围依据。少屏可以合并内容模块，不允许用“简洁”“留白”作为省略理由。缺失的用户要求应进入missingFields。"}\n证据引用规则：sections[].evidence 只能填写 evidenceCatalog 中的 id（user_description 或真实资产 ID），不要填写自然语言证据句。`, input: planInput, images, timeoutMs: 180000, maxAttempts: 1, requestId, monitor: { projectId, runId, operation: "v4_plan" } }), result => { cp.plan = result; });
     if (!plan) throw new Error("规划结果为空");
     if (confirmedEstimates) plan = { ...plan, sections: plan.sections.map(section => ({ ...section, title: customerFacingCopy(section.title) || "商品信息", copy: customerFacingCopy(section.copy) })) };
@@ -553,7 +554,7 @@ async function executeV4(runId: string) {
       progress.state = "generating"; await persist(`GENERATE:${section.title}`);
       try {
         await requestOnce(key, async requestId => {
-          const source = cp.requests![key].resultSource ?? await adapter.generateImageOnce({ model: section.type === "HERO" ? input.heroModelId || input.imageModelId : input.imageModelId, prompt: section.visualPrompt, quality: input.quality, background: settings.background, outputFormat: settings.outputFormat, outputCompression: settings.outputCompression, moderation: settings.moderation, ...(settings.size && settings.size !== "auto" ? { size: settings.size } : { aspectRatio: section.type === "HERO" ? "1:1" : "3:4" }), referenceImages: visualImages, timeoutMs: 180000, monitor: { projectId, sectionId: section.id, runId, operation: "v4_image_generation" },
+          const source = cp.requests![key].resultSource ?? await adapter.generateImageOnce({ model: section.type === "HERO" ? input.heroModelId || input.imageModelId : input.imageModelId, prompt: section.visualPrompt, quality: input.quality, background: settings.background, outputFormat: settings.outputFormat, outputCompression: settings.outputCompression, moderation: settings.moderation, ...(settings.size && settings.size !== "auto" ? { size: settings.size } : { aspectRatio: section.type === "HERO" ? "1:1" : input.xhsPromptPack?.aspect || "3:4" }), referenceImages: visualImages, timeoutMs: 180000, monitor: { projectId, sectionId: section.id, runId, operation: "v4_image_generation" },
             upstreamTask: cp.requests![key].upstreamTask,
             onUpstreamTask: async task => { cp.requests![key].upstreamTask = task; await persist(); },
             beforeSubmit: async () => { if (cp.recoverImagesOnly) throw new Error("仅恢复已有图片，禁止提交新的生图请求。"); await lease.assertActive(); },

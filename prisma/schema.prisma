@@ -81,6 +81,7 @@ model Project {
   sections      PageSection[]
   tasks         GenerationTask[]
   detailRuns    DetailRun[]
+  ktuJob        KtuJob?
 }
 
 model DetailRun {
@@ -342,4 +343,87 @@ model AgentCheckpointWrite {
 model AgentSetting {
   id String @id @default("default")
   value Json
+}
+
+// K图：商K资料库、宣传任务与定时任务
+model KtuCity {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  tier      String
+  sortOrder Int        @default(0)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  venues    KtuVenue[]
+}
+model KtuVenue {
+  id         String    @id @default(cuid())
+  cityId     String
+  city       KtuCity   @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  name       String
+  district   String    @default("")
+  sortOrder  Int       @default(0)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  @@unique([cityId, name])
+  @@index([cityId, sortOrder])
+}
+model KtuSchedule {
+  id            String           @id @default(cuid())
+  name          String
+  enabled       Boolean          @default(true)
+  scope         String
+  cityIds       Json
+  tiers         Json
+  templateKeys  Json
+  frequency     String
+  timeOfDay     String           @default("09:00")
+  weekdays      Json
+  intervalHours Int              @default(24)
+  setsPerRun    Int              @default(5)
+  dailyLimit    Int              @default(0)
+  aspect        String           @default("3:4")
+  outputDir     String           @default("")
+  cursor        Json
+  nextRunAt     DateTime?
+  lastRunAt     DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  runs          KtuScheduleRun[]
+}
+model KtuScheduleRun {
+  id         String      @id @default(cuid())
+  scheduleId String?
+  schedule   KtuSchedule? @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  kind       String      @default("schedule")
+  outputDir  String      @default("")
+  status     String      @default("running")
+  planned    Json
+  nextIndex  Int         @default(0)
+  succeeded  Int         @default(0)
+  failed     Int         @default(0)
+  message    String?
+  notified   Boolean     @default(false)
+  startedAt  DateTime    @default(now())
+  finishedAt DateTime?
+  jobs       KtuJob[]
+  @@index([scheduleId, startedAt])
+}
+model KtuJob {
+  id            String          @id @default(cuid())
+  projectId     String          @unique
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  templateKey   String
+  cityId        String?
+  cityName      String
+  venueIds      Json
+  aspect        String          @default("3:4")
+  scheduleRunId String?
+  scheduleRun   KtuScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: SetNull)
+  exportedPath  String?
+  excluded      Json?
+  settledAt     DateTime?
+  createdAt     DateTime        @default(now())
+  @@index([createdAt])
+  @@index([scheduleRunId])
 }

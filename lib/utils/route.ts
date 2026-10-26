@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import { apiError, apiSuccess } from "@/lib/utils/api";
 import { networkErrorCode } from "./network-error";
 import { isStructuredSchemaRejection, requestErrorMessage } from "./request-error";
+import { ZHISHU_MANAGED_AI } from "@/lib/zhishu/connection-file";
 
 export function ok<T>(data: T, init?: ResponseInit) {
   return NextResponse.json(apiSuccess(data), init);
@@ -29,7 +30,7 @@ function mapProviderError(error: Error) {
   if (/monthly spending limit|spending limit|insufficient_quota|quota|billing|额度已用尽|月度限额/.test(text)) {
     return {
       code: "SPENDING_LIMIT_REACHED",
-      message: "当前 API Key 的额度已用尽。请前往代理商控制台提高或移除月度限额，或更换可用的 API Key。",
+      message: ZHISHU_MANAGED_AI ? "额度不足，请到网站充值后再试。" : "当前 API Key 的额度已用尽。请前往代理商控制台提高或移除月度限额，或更换可用的 API Key。",
       status: 403,
     };
   }
@@ -45,7 +46,7 @@ function mapProviderError(error: Error) {
   if (/invalid token|unauthorized|forbidden|鉴权失败|401|403/.test(text)) {
     return {
       code: "PROVIDER_AUTH_ERROR",
-      message: "当前 Provider 鉴权失败。请检查 baseURL、API Key 或代理商权限配置。",
+      message: ZHISHU_MANAGED_AI ? "AI 接入已失效，请回到网站重新点「一键接入」。" : "当前 Provider 鉴权失败。请检查 baseURL、API Key 或代理商权限配置。",
       status: 401,
     };
   }
@@ -77,6 +78,7 @@ export function handleRouteError(error: unknown) {
   if (error instanceof Error) {
     const code = (error as { code?: string }).code;
     if (code === "PROMPT_REVIEW_CONFLICT") return fail(code, error.message, null, 409);
+    if (code === "PROVIDER_CREDENTIALS_MISSING" && ZHISHU_MANAGED_AI) return fail(code, "还没有接入 AI，请回到网站在「我的应用」里点「一键接入」。", { source: "local" }, 400);
     if (code === "PROVIDER_CREDENTIALS_MISSING") return fail(code, "当前浏览器未提供此服务的 API Key。请在设置中填写对应服务的密钥；不同浏览器或设备需要分别配置。", { source: "local" }, 400);
     if (code === "PROVIDER_DISCOVERY_AUTH_ERROR") {
       const status = (error as Error & { status: number }).status;

@@ -1,10 +1,13 @@
 import { NextRequest } from "next/server";
+import { managedProviderGuard } from "@/lib/zhishu/guard";
 import { z } from "zod";
 import { normalizeOpenAiBaseUrl, resolvedTextSettings, textEndpoint } from "@/lib/ai/text-protocol";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { withProviderCredentials } from "@/lib/services/provider-runtime";
 import { fail, handleRouteError, ok } from "@/lib/utils/route";
 export async function POST(request: NextRequest) {
+  const blocked = managedProviderGuard();
+  if (blocked) return blocked;
   let endpoint: string | undefined;
   try {
     return await withProviderCredentials(request, async () => {

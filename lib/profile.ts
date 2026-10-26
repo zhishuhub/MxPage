@@ -1,3 +1,4 @@
+import { ZHISHU_MANAGED_AI } from "@/lib/zhishu/managed";
 import { z } from "zod";
 
 export const PROFILE_STORAGE_KEY = "mxpage:profile:v1";
@@ -7,7 +8,7 @@ export const profileSchema = z.object({
   avatar: z.string().max(400_000, "头像文件过大").regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/, "请上传有效的头像图片").nullable(),
 });
 export type UserProfile = z.infer<typeof profileSchema>;
-export const defaultProfile: UserProfile = { name: "创作者", username: "mxpage", avatar: null };
+export const defaultProfile: UserProfile = { name: "创作者", username: ZHISHU_MANAGED_AI ? "ktu" : "mxpage", avatar: null };
 
 export function readProfile(raw: string | null): UserProfile {
   try {

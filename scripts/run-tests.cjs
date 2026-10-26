@@ -5,7 +5,7 @@ const { spawnSync } = require('node:child_process');
 
 process.chdir(path.resolve(__dirname, '..'));
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mxpage-test-suite-'));
-const env = { ...process.env, DATABASE_URL: `file:${path.join(directory, 'suite.db').replaceAll('\\', '/')}`, STORAGE_ROOT: path.join(directory, 'storage') };
+const env = { ...process.env, DATABASE_URL: `file:${path.join(directory, 'suite.db').replaceAll('\\', '/')}`, STORAGE_ROOT: path.join(directory, 'storage'), ZHISHU_MANAGED_AI: '0' };
 try {
   const migration = spawnSync(process.execPath, ['scripts/apply-prisma-migrations.cjs'], { env, stdio: 'inherit', windowsHide: true });
   if (migration.error) throw migration.error;

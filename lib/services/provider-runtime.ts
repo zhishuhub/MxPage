@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import type { NextRequest } from "next/server";
 
 import { env } from "@/lib/utils/env";
+import { ZHISHU_MANAGED_AI, zhishuCredentials } from "@/lib/zhishu/connection-file";
 
 export type RequestProviderCredentials = {
   // In-memory only. Agent tasks meter delegated V4/image calls separately.
@@ -30,12 +31,15 @@ export function isBaseUrlLocked() {
 }
 
 export function resolveEffectiveBaseUrl(baseUrl?: string | null) {
+  if (ZHISHU_MANAGED_AI) return normalizeBaseUrl(zhishuCredentials().baseUrl) || normalizeBaseUrl(baseUrl);
   const lockedBaseUrl = getLockedBaseUrl();
   if (lockedBaseUrl) return lockedBaseUrl;
   return normalizeBaseUrl(baseUrl);
 }
 
 export function readProviderCredentialsFromRequest(request: NextRequest): RequestProviderCredentials {
+  // 一键接入：不认浏览器带来的地址和密钥，一律用接入码换来的那一份。
+  if (ZHISHU_MANAGED_AI) return zhishuCredentials() as RequestProviderCredentials;
   return {
     apiKey: request.headers.get("x-mxpage-api-key")?.trim() || request.headers.get(["x", String.fromCharCode(109, 120, 105, 110, 115, 112, 105, 114, 101), "api", "key"].join("-"))?.trim() || undefined,
     baseUrl: request.headers.get("x-mxpage-base-url")?.trim() || request.headers.get(["x", String.fromCharCode(109, 120, 105, 110, 115, 112, 105, 114, 101), "base", "url"].join("-"))?.trim() || undefined,
@@ -49,8 +53,9 @@ export async function withProviderCredentials<T>(request: NextRequest, handler: 
 export async function runWithProviderCredentials<T>(credentials: RequestProviderCredentials, handler: () => Promise<T>) {
   return providerCredentialStorage.run(credentials, handler);
 }
-export function getRequestProviderCredentials() {
-  return providerCredentialStorage.getStore() ?? {};
+export function getRequestProviderCredentials(): RequestProviderCredentials {
+  // 定时任务等后台调用没有请求上下文，接入后直接用接入凭据。
+  return providerCredentialStorage.getStore() ?? (ZHISHU_MANAGED_AI ? zhishuCredentials() : {});
 }
 
 export function providerCredentialFingerprint(apiKey?: string) {

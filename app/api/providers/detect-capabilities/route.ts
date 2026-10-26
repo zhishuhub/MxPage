@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { managedProviderGuard } from "@/lib/zhishu/guard";
 import { z } from "zod";
 
 import { normalizeDetectedModels } from "@/lib/ai/capability-detector";
@@ -20,6 +21,8 @@ const detectSchema = z.union([
 ]);
 
 export async function POST(request: NextRequest) {
+  const blocked = managedProviderGuard();
+  if (blocked) return blocked;
   return withProviderCredentials(request, async () => {
     try {
     const input = detectSchema.parse(await request.json());

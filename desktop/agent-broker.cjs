@@ -11,7 +11,8 @@ function unpack(result) {
   for (const item of result?.content || []) if (item.type === "text") { try { return JSON.parse(item.text); } catch {} }
   return {};
 }
-function createAgentBroker({ getWindow, getServerUrl }) {
+function createAgentBroker(options) {
+  const { getWindow, getServerUrl } = options;
   const pendingPlans = new Map(), grants = new Map(), localServers = new Map();
   let client, catalog, activeRun, serverChild, busy = false;
   function trusted(event) {
@@ -65,7 +66,8 @@ function createAgentBroker({ getWindow, getServerUrl }) {
   });
   ipcMain.handle("mxpage-agent:stop", async event => { trusted(event); await userStop(); });
   ipcMain.handle("mxpage-agent:status", async event => { trusted(event); return status(); });
-  globalShortcut.register("CommandOrControl+Shift+Escape", () => { void userStop(); });
+  // K图隐藏了 Agent，不占用 Ctrl+Shift+Esc（Windows 任务管理器的快捷键）
+  if (options.stopShortcut !== false) globalShortcut.register("CommandOrControl+Shift+Escape", () => { void userStop(); });
   function status() {
     return { available: ["win32", "darwin"].includes(process.platform), platform: `${process.platform}-${process.arch}`, activeRun, busy,
       permissions: process.platform === "darwin" ? { accessibility: systemPreferences.isTrustedAccessibilityClient(false), screen: systemPreferences.getMediaAccessStatus("screen") } : { interactiveDesktop: !process.env.SESSIONNAME?.toLowerCase().includes("services") },

@@ -10,6 +10,7 @@ const { app, BrowserWindow, dialog, shell } = require("electron");
 
 const { toSqliteFileUrl } = require("../scripts/runtime-paths.cjs");
 const { createAgentBroker } = require("./agent-broker.cjs");
+const { createKtuDesktop, launchedHidden } = require("./ktu-desktop.cjs");
 
 let mainWindow = null;
 let splashWindow = null;
@@ -17,11 +18,38 @@ let serverProcess = null;
 let serverUrl = null;
 let isQuitting = false;
 let agentBroker = null;
+let ktuDesktop = null;
+const startHidden = launchedHidden();
+
+// 只允许运行一个 K图：再次打开时把已有窗口叫出来（定时任务不会被重复执行）
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => showWindow());
+}
 
 function getWindowIcon() {
   return app.isPackaged
     ? path.join(process.resourcesPath, "icon.ico")
     : path.join(__dirname, "../public/brand-icon.ico");
+}
+
+function getTrayIcon() {
+  return app.isPackaged
+    ? path.join(getStandaloneRoot(), "public", "brand-icon.png")
+    : path.join(__dirname, "../public/brand-icon.png");
+}
+
+/** 把窗口叫到前台；route 给定时跳到对应页面。 */
+function showWindow(route) {
+  if (!mainWindow) {
+    if (serverUrl) void createMainWindow(serverUrl, route);
+    return;
+  }
+  if (route && serverUrl) void mainWindow.loadURL(`${serverUrl}${route}`);
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 function getStandaloneRoot() {
@@ -83,9 +111,14 @@ async function ensureDesktopRuntimeConfig() {
   };
 }
 
+// 模型地址和密钥只来自网站接入，不继承系统里的同类环境变量
+const BLOCKED_ENV = /^(OPENAI_|ANTHROPIC_|LOCK_BASE_URL$|FORCED_API_BASE|ZHISHU_MANAGED_AI$)/;
+
 function getRuntimeEnv(runtime, port) {
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !BLOCKED_ENV.test(key)));
   return {
-    ...process.env,
+    ...inherited,
+    KTU_OUTPUT_DIR: path.join(app.getPath("pictures"), "K图"),
     NODE_ENV: "production",
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
@@ -94,7 +127,7 @@ function getRuntimeEnv(runtime, port) {
     DATABASE_URL: toSqliteFileUrl(runtime.databasePath),
     STORAGE_ROOT: runtime.storageDir,
     APP_SECRET: runtime.appSecret,
-    NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME || "MxPage",
+    NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME || "K图",
   };
 }
 
@@ -227,7 +260,7 @@ async function startNextServer(runtime) {
   serverProcess.on("exit", (code) => {
     if (!isQuitting && code !== 0) {
       dialog.showErrorBox(
-        "MxPage 启动失败",
+        "K图 启动失败",
         serverErrors || `内置服务异常退出，退出码：${code}`
       );
       app.quit();
@@ -251,7 +284,7 @@ function createSplashWindow() {
     show: false,
     center: true,
     backgroundColor: "#111827",
-    title: "MxPage",
+    title: "K图",
     icon: getWindowIcon(),
     webPreferences: {
       contextIsolation: true,
@@ -269,7 +302,7 @@ function createSplashWindow() {
           http-equiv="Content-Security-Policy"
           content="default-src 'self' 'unsafe-inline' data:;"
         />
-        <title>MxPage</title>
+        <title>K图</title>
         <style>
           * { box-sizing: border-box; }
           html, body {
@@ -342,7 +375,7 @@ function createSplashWindow() {
       <body>
         <div class="wrap">
           <div class="card">
-            <div class="title">MxPage</div>
+            <div class="title">K图</div>
             <div class="desc">AI e-commerce detail page generation and editing workspace</div>
             <div class="status" id="status">正在启动应用...</div>
             <div class="bar"><div></div></div>
@@ -381,7 +414,7 @@ function updateSplashStatus(text) {
     .catch(() => {});
 }
 
-function createMainWindow(url) {
+function createMainWindow(url, route) {
   mainWindow = new BrowserWindow({
     width: 1520,
     height: 980,
@@ -390,7 +423,7 @@ function createMainWindow(url) {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: "#f5f5f5",
-    title: "MxPage",
+    title: "K图",
     icon: getWindowIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -400,12 +433,14 @@ function createMainWindow(url) {
     },
   });
 
+  const visible = !startHidden || Boolean(route);
   mainWindow.once("ready-to-show", () => {
     if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.close();
     }
-    mainWindow?.show();
+    if (visible) mainWindow?.show();
   });
+  ktuDesktop?.attachWindow(mainWindow);
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -419,7 +454,7 @@ function createMainWindow(url) {
     if (new URL(target).origin !== new URL(url).origin) event.preventDefault();
   });
 
-  return mainWindow.loadURL(url);
+  return mainWindow.loadURL(route ? `${url}${route}` : url);
 }
 
 async function shutdownServerProcess() {
@@ -443,9 +478,11 @@ async function shutdownServerProcess() {
 
 async function bootstrapDesktopApp() {
   console.time("desktop:total");
-  agentBroker = createAgentBroker({ getWindow: () => mainWindow, getServerUrl: () => serverUrl });
+  agentBroker = createAgentBroker({ getWindow: () => mainWindow, getServerUrl: () => serverUrl, stopShortcut: false });
+  ktuDesktop = createKtuDesktop({ getWindow: () => mainWindow, getServerUrl: () => serverUrl, showWindow, iconPath: getWindowIcon(), trayIconPath: getTrayIcon(), quit: () => app.quit() });
 
-  createSplashWindow();
+  // 开机自启时不弹启动画面，直接在托盘里运行
+  if (!startHidden) createSplashWindow();
   updateSplashStatus("正在准备本地运行环境...");
   console.time("desktop:runtime");
   const runtime = await ensureDesktopRuntimeConfig();
@@ -465,17 +502,21 @@ async function bootstrapDesktopApp() {
   console.time("desktop:window");
   await createMainWindow(url);
   console.timeEnd("desktop:window");
+  ktuDesktop.start();
 
   console.timeEnd("desktop:total");
 }
 
 app.on("before-quit", async () => {
   isQuitting = true;
+  app.isQuitting = true;
+  ktuDesktop?.stop();
   await agentBroker?.close();
   await shutdownServerProcess();
 });
 
 app.on("window-all-closed", () => {
+  if (ktuDesktop?.keepRunningWhenClosed()) return;
   if (process.platform !== "darwin") {
     app.quit();
   }
@@ -488,9 +529,10 @@ app.on("activate", async () => {
 });
 
 app.whenReady().then(() => {
+  if (!app.hasSingleInstanceLock()) return;
   bootstrapDesktopApp().catch((error) => {
     dialog.showErrorBox(
-      "MxPage 启动失败",
+      "K图 启动失败",
       error instanceof Error ? error.message : "未知错误"
     );
     app.quit();

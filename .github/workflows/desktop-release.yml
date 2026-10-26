@@ -2,7 +2,8 @@ name: Desktop release
 
 on:
   push:
-    tags: ["v*"]
+    # K图一键接入版走 zhishu-release.yml（v*-zs.* 的 tag）
+    tags: ["v*", "!v*-zs.*"]
   workflow_dispatch:
     inputs:
       publish:

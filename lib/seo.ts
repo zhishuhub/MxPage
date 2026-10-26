@@ -1,5 +1,7 @@
-export const productTitle = "MxPage · AI 电商详情页与商品图工作台";
-export const productDescription = "开源 AI 电商详情页生成工具，支持商品主图、完整详情长图、批量图片翻译、小红书图文、断点恢复与费用监控，可本地部署或使用 Windows / macOS 桌面版。";
+import { ZHISHU_MANAGED_AI } from "@/lib/zhishu/managed";
+
+export const productTitle = ZHISHU_MANAGED_AI ? "K图 · 商K宣传图文" : "MxPage · AI 电商详情页与商品图工作台";
+export const productDescription = ZHISHU_MANAGED_AI ? "按城市整理商K店名，自动生成排行榜、精选推荐、选店攻略等抖音图文，支持批量生成和定时任务。" : "开源 AI 电商详情页生成工具，支持商品主图、完整详情长图、批量图片翻译、小红书图文、断点恢复与费用监控，可本地部署或使用 Windows / macOS 桌面版。";
 
 export function publicSiteUrl() {
   const value = process.env.NEXT_PUBLIC_SITE_URL?.trim();

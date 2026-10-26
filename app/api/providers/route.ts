@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { managedProviderGuard } from "@/lib/zhishu/guard";
 import { NextRequest } from "next/server";
 
 import {
@@ -41,6 +42,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = managedProviderGuard();
+  if (blocked) return blocked;
   return withProviderCredentials(request, async () => {
     try {
       const parsed = providerSaveSchema.parse(await request.json());
@@ -63,6 +66,8 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  const blocked = managedProviderGuard();
+  if (blocked) return blocked;
   try {
     const parsed = providerActivateSchema.parse(await request.json());
     const providers = await activateProviderConfig(parsed.providerId);
@@ -73,6 +78,8 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const blocked = managedProviderGuard();
+  if (blocked) return blocked;
   try {
     const parsed = providerDeleteSchema.parse({
       providerId: request.nextUrl.searchParams.get("id") ?? "",
