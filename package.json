@@ -1,7 +1,7 @@
 {
   "name": "mxpage",
   "productName": "KTu",
-  "version": "0.3.3-zs.2",
+  "version": "0.3.3-zs.3",
   "private": false,
   "description": "K图：商K宣传图文生成（基于 MxPage 修改）",
   "author": "灵矩绘境 · MxPage；K图修改版",
@@ -164,7 +164,7 @@
     "mac": {
       "category": "public.app-category.graphics-design",
       "target": [
-        "zip"
+        "dmg"
       ],
       "icon": "public/brand-icon.png",
       "identity": "-",
@@ -180,7 +180,16 @@
       "installerIcon": "public/brand-icon.ico",
       "uninstallerIcon": "public/brand-icon.ico",
       "installerHeaderIcon": "public/brand-icon.ico",
-      "shortcutName": "K图"
+      "shortcutName": "K图",
+      "language": "2052",
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "uninstallDisplayName": "K图",
+      "artifactName": "KTu-${version}-windows-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "KTu-${version}-macos-${arch}.${ext}"
     }
   }
 }

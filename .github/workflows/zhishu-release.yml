@@ -1,6 +1,6 @@
 name: K图 desktop release
 
-# K图（一键接入版）的打包：推 v{版本}-zs.{序号} 的 tag 触发，打 Windows x64、macOS Apple 芯片绿色版（zip），
+# K图（一键接入版）的打包：推 v{版本}-zs.{序号} 的 tag 触发，打 Windows x64 安装程序（exe）、macOS Apple 芯片安装包（dmg），
 # 直接发正式 Release。上游的浏览器回归测试驱动的是原项目界面，接入页会挡住它，这里不跑。
 on:
   push:
@@ -39,11 +39,11 @@ jobs:
           - os: windows-2022
             platform: windows
             arch: x64
-            flags: --win zip --x64
+            flags: --win nsis --x64
           - os: macos-15
             platform: macos
             arch: arm64
-            flags: --mac zip --arm64
+            flags: --mac dmg --arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -76,7 +76,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist-desktop/KTu-*.zip
+          path: |
+            dist-desktop/KTu-*.exe
+            dist-desktop/KTu-*.dmg
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -96,16 +98,15 @@ jobs:
       - name: Verify assets and create checksums
         run: |
           version="$(node -p "require('./package.json').version")"
-          for platform in windows-x64 macos-arm64; do
-            test -s "release/KTu-${version}-${platform}.zip"
-          done
+          test -s "release/KTu-${version}-windows-x64.exe"
+          test -s "release/KTu-${version}-macos-arm64.dmg"
           cd release
-          sha256sum KTu-*.zip | tee SHA256SUMS.txt
+          sha256sum KTu-*.exe KTu-*.dmg | tee SHA256SUMS.txt
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/*.zip release/SHA256SUMS.txt \
+          gh release create "$GITHUB_REF_NAME" release/KTu-*.exe release/KTu-*.dmg release/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "K图 $GITHUB_REF_NAME" \
             --notes-file ".release/notes/$GITHUB_REF_NAME.md"
