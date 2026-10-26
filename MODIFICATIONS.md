@@ -12,6 +12,6 @@
 - **隐藏的原功能**：一键详情页、详情页翻译、小红书图文、Agent 工作台、API 监控的入口不显示，代码保留；首页跳到「商K宣传」。
 - **更新**：原项目没有自动更新；「关于」和「AI 服务」里查询网站上本应用的版本，有新版提示去网站下载。
 - **改名换图标**：程序名 KTu，界面显示「K图」，新图标由 `scripts/build-ktu-icon.mjs` 生成；「关于」注明基于原项目修改并给出两边源码地址。
-- **打包**：新增 `.github/workflows/zhishu-release.yml`，推 `v{版本}-zs.{序号}` 的 tag 打 Windows x64、macOS arm64 绿色版并发布 Release；上游的 `desktop-release.yml` 不再响应这类 tag。
+- **打包**：新增 `.github/workflows/zhishu-release.yml`，推 `v{版本}-zs.{序号}` 的 tag 打 Windows x64、macOS arm64 绿色版并发布 Release；上游的 `desktop-release.yml` 不再响应这类 tag。`next.config.mjs` 显式带上 exceljs 依赖里按 module-sync 解析的 `require.mjs`（文件追踪会漏掉，打包后读写 Excel 报错），桌面冒烟测试加了模板下载接口。
 
 所有接入相关改动都用 `lib/zhishu/managed.ts` 的 `ZHISHU_MANAGED_AI` 开关包着；原项目的单元测试以 `ZHISHU_MANAGED_AI=0` 运行，照旧验证原行为。

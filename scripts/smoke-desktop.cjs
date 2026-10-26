@@ -66,7 +66,7 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
     assert.ok(ready, `Packaged server did not start: ${serverLog}`);
-    for (const route of ["/ktu", "/ktu/library", "/ktu/schedules", "/ktu/works", "/api/ktu/cities", "/api/ktu/schedules", "/api/zhishu/status", "/", "/agent", "/api/agent/sessions", "/settings/agent", "/translate", "/xiaohongshu", "/history", "/tasks", "/settings/providers", "/settings/profile", "/settings/about", "/monitor/usage", "/api/projects", "/llms.txt", "/assets/phone-mockup-frame.png"]) {
+    for (const route of ["/ktu", "/ktu/library", "/ktu/schedules", "/ktu/works", "/api/ktu/cities", "/api/ktu/import/template", "/api/ktu/schedules", "/api/zhishu/status", "/", "/agent", "/api/agent/sessions", "/settings/agent", "/translate", "/xiaohongshu", "/history", "/tasks", "/settings/providers", "/settings/profile", "/settings/about", "/monitor/usage", "/api/projects", "/llms.txt", "/assets/phone-mockup-frame.png"]) {
       const response = await fetch(`http://127.0.0.1:${env.PORT}${route}`, { signal: AbortSignal.timeout(15_000) });
       assert.equal(response.status, 200, `${route}: ${serverLog}`);
       if (route === "/api/projects") assert.deepEqual((await response.json()).data, []);
