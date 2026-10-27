@@ -414,6 +414,7 @@ model KtuJob {
   projectId     String          @unique
   project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   templateKey   String
+  templateName  String          @default("")
   cityId        String?
   cityName      String
   venueIds      Json
@@ -426,4 +427,25 @@ model KtuJob {
   createdAt     DateTime        @default(now())
   @@index([createdAt])
   @@index([scheduleRunId])
+}
+model KtuTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String
+  builtin   Boolean  @default(false)
+  minVenues Int
+  maxVenues Int
+  pick      String
+  pages     String
+  pageCount Int      @default(4)
+  content   String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model KtuSetting {
+  id                 String   @id @default("default")
+  reviewEnabled      Boolean  @default(true)
+  reviewRequirements String   @default("")
+  updatedAt          DateTime @updatedAt
 }

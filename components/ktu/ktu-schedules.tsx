@@ -6,10 +6,10 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { KTU_TEMPLATES, KTU_TIERS, templateByKey, tierLabel } from "@/lib/ktu/catalog";
+import { KTU_TIERS, tierLabel } from "@/lib/ktu/catalog";
 import { cn } from "@/lib/utils";
 import { api, desktopBridge, formatTime, useSchedulerTick } from "./api";
-import { RUN_STATUS_LABEL, type KtuCityView } from "./types";
+import { RUN_STATUS_LABEL, type KtuCityView, type KtuTemplateView } from "./types";
 
 type ScheduleView = {
   id: string; name: string; enabled: boolean; scope: string; cityIds: string[]; tiers: string[]; templateKeys: string[];
@@ -22,18 +22,20 @@ type ScheduleForm = Omit<ScheduleView, "id" | "nextRunAt" | "lastRunAt" | "timin
 const WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const chip = (active: boolean) => cn("rounded-xl border px-3 py-1.5 text-sm transition-colors", active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background hover:bg-accent");
 const selectClass = "h-10 rounded-xl border border-input bg-card px-3 text-sm";
-const emptyForm = (): ScheduleForm => ({ name: "", enabled: true, scope: "all", cityIds: [], tiers: [], templateKeys: KTU_TEMPLATES.map(template => template.key), frequency: "daily", timeOfDay: "09:00", weekdays: [1, 3, 5], intervalHours: 6, setsPerRun: 5, dailyLimit: 0, aspect: "3:4", outputDir: "" });
+const emptyForm = (templateKeys: string[]): ScheduleForm => ({ name: "", enabled: true, scope: "all", cityIds: [], tiers: [], templateKeys, frequency: "daily", timeOfDay: "09:00", weekdays: [1, 3, 5], intervalHours: 6, setsPerRun: 5, dailyLimit: 0, aspect: "3:4", outputDir: "" });
 const toggle = <T,>(list: T[], value: T) => list.includes(value) ? list.filter(item => item !== value) : [...list, value];
 
 export function KtuSchedules() {
   useSchedulerTick();
   const [data, setData] = useState<{ defaultOutputDir: string; schedules: ScheduleView[] } | null>(null);
   const [cities, setCities] = useState<KtuCityView[]>([]);
+  const [templates, setTemplates] = useState<KtuTemplateView[]>([]);
   const [editing, setEditing] = useState<{ id: string | null; form: ScheduleForm } | null>(null);
 
   const load = useCallback(async () => setData(await api.get("/api/ktu/schedules")), []);
   useEffect(() => {
     api.get<KtuCityView[]>("/api/ktu/cities").then(setCities).catch(() => undefined);
+    api.get<KtuTemplateView[]>("/api/ktu/templates").then(setTemplates).catch(() => undefined);
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => { try { await load(); } catch { /* 下次再取 */ } if (!stopped) timer = setTimeout(poll, 5000); };
@@ -52,7 +54,7 @@ export function KtuSchedules() {
   return <section className="mx-auto max-w-5xl space-y-6 py-2">
     <header className="flex flex-wrap items-end justify-between gap-4">
       <div><p className="text-sm text-muted-foreground">定时任务</p><h1 className="mt-2 text-3xl font-semibold">按时自动出图文</h1><p className="mt-2 text-muted-foreground">到点自动轮换城市和模板生成，成品存到输出文件夹，直接拿去上传。</p></div>
-      {!editing && <Button onClick={() => setEditing({ id: null, form: emptyForm() })}><Plus className="mr-1 h-4 w-4" />新建任务</Button>}
+      {!editing && <Button onClick={() => setEditing({ id: null, form: emptyForm(templates.map(template => template.key)) })}><Plus className="mr-1 h-4 w-4" />新建任务</Button>}
     </header>
 
     <BackgroundCard />
@@ -60,6 +62,7 @@ export function KtuSchedules() {
     {editing && <ScheduleEditor
       initial={editing.form}
       cities={cities}
+      templates={templates}
       defaultOutputDir={data?.defaultOutputDir ?? ""}
       onCancel={() => setEditing(null)}
       onSave={async form => {
@@ -75,7 +78,7 @@ export function KtuSchedules() {
         <div className="space-y-1">
           <h2 className="font-semibold">{schedule.name}{!schedule.enabled && <span className="ml-2 text-xs font-normal text-muted-foreground">已暂停</span>}{schedule.running && <span className="ml-2 text-xs font-normal">运行中</span>}</h2>
           <p className="text-sm text-muted-foreground">{schedule.timing} · 每次 {schedule.setsPerRun} 套{schedule.dailyLimit ? ` · 每天最多 ${schedule.dailyLimit} 套` : ""} · {schedule.aspect} 竖版</p>
-          <p className="text-sm text-muted-foreground">{scopeText(schedule)} · {schedule.templateKeys.map(key => templateByKey(key)?.name ?? key).join("、")}</p>
+          <p className="text-sm text-muted-foreground">{scopeText(schedule)} · {schedule.templateKeys.map(key => templates.find(template => template.key === key)?.name ?? "已删除的模板").join("、")}</p>
           <p className="text-sm text-muted-foreground">下次运行：{schedule.enabled ? formatTime(schedule.nextRunAt) : "—"} · 输出到：{schedule.outputDir || data.defaultOutputDir}</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -97,7 +100,7 @@ export function KtuSchedules() {
   </section>;
 }
 
-function ScheduleEditor({ initial, cities, defaultOutputDir, onSave, onCancel }: { initial: ScheduleForm; cities: KtuCityView[]; defaultOutputDir: string; onSave: (form: ScheduleForm) => Promise<void>; onCancel: () => void }) {
+function ScheduleEditor({ initial, cities, templates, defaultOutputDir, onSave, onCancel }: { initial: ScheduleForm; cities: KtuCityView[]; templates: KtuTemplateView[]; defaultOutputDir: string; onSave: (form: ScheduleForm) => Promise<void>; onCancel: () => void }) {
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<ScheduleForm>) => setForm(current => ({ ...current, ...patch }));
@@ -118,7 +121,7 @@ function ScheduleEditor({ initial, cities, defaultOutputDir, onSave, onCancel }:
 
     <div className="space-y-2">
       <p className="text-sm font-medium">模板</p>
-      <div className="flex flex-wrap gap-2">{KTU_TEMPLATES.map(template => <button key={template.key} type="button" className={chip(form.templateKeys.includes(template.key))} onClick={() => set({ templateKeys: toggle(form.templateKeys, template.key) })}>{template.name}</button>)}</div>
+      <div className="flex flex-wrap gap-2">{templates.map(template => <button key={template.key} type="button" className={chip(form.templateKeys.includes(template.key))} onClick={() => set({ templateKeys: toggle(form.templateKeys, template.key) })}>{template.name}</button>)}</div>
     </div>
 
     <div className="flex flex-wrap items-end gap-3">

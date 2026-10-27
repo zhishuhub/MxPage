@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { describeTiming, nextRunAfter } from "../lib/ktu/schedule-time";
+import { BUILTIN_TEMPLATES } from "../lib/ktu/catalog";
 import { planRotation } from "../lib/ktu/scheduler";
+
+const templates = (...keys: string[]) => keys.map(key => BUILTIN_TEMPLATES.find(template => template.key === key)!);
 
 const at = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute);
 
@@ -30,10 +33,10 @@ test("interval schedules add whole hours", () => {
 test("rotation changes city every set, then moves to the next template, skipping cities that lack venues", () => {
   const venues = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `v${n}-${i}`, name: `店${i}`, district: "", sortOrder: i, lastUsedAt: null }));
   const cities = [{ id: "a", name: "A", venues: venues(5) }, { id: "b", name: "B", venues: venues(2) }, { id: "c", name: "C", venues: venues(4) }];
-  const first = planRotation(cities, ["ranking", "recommend"], 4, { city: 0, template: 0 }, "3:4");
-  // B 只有 2 家，不够排行榜（至少 3 家），被跳过；推荐 1 家就够
+  const first = planRotation(cities, templates("ranking", "recommend"), 4, { city: 0, template: 0 }, "3:4");
+  // B 只有 2 家，不够排行榜（至少 3 家），被跳过；推荐 2 家就够
   assert.deepEqual(first.specs.map(spec => `${spec.cityName}:${spec.templateKey}`), ["A:ranking", "C:ranking", "A:recommend", "B:recommend"]);
-  const second = planRotation(cities, ["ranking", "recommend"], 2, first.cursor, "3:4");
+  const second = planRotation(cities, templates("ranking", "recommend"), 2, first.cursor, "3:4");
   assert.deepEqual(second.specs.map(spec => `${spec.cityName}:${spec.templateKey}`), ["C:recommend", "A:ranking"]);
-  assert.deepEqual(planRotation([{ id: "b", name: "B", venues: venues(2) }], ["ranking"], 3, { city: 0, template: 0 }, "3:4").specs, []);
+  assert.deepEqual(planRotation([{ id: "b", name: "B", venues: venues(2) }], templates("ranking"), 3, { city: 0, template: 0 }, "3:4").specs, []);
 });

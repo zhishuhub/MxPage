@@ -45,19 +45,12 @@ Use the same palette, typography, safe margins, line weight and illustration/pho
 Prioritize the user's explicit style. Keep one dominant visual and a clear reading path, high-contrast text-safe areas, and distinct title/body/note scales. Do not invent text, logos, numbers, claims or charts. No placeholder text; render only the Exact copy below.
 The page-specific composition may vary, but the series visual system stays fixed.`;
 
-export type XhsPromptPack = { version: 1; brief: string; planning: string; artDirection: string; render: string; platformName?: string; aspect?: "3:4" | "9:16" };
+// K图的任务带 ktu：四段提示词换成 lib/ktu/prompts.ts 里的抖音商K版本，另带检查开关和检查要求。
+export type KtuPackExtras = { review: { enabled: boolean; requirements: string }; imageReview: string; setReview: string };
+export type XhsPromptPack = { version: 1; brief: string; planning: string; artDirection: string; render: string; platformName?: string; aspect?: "3:4" | "9:16"; ktu?: KtuPackExtras };
 
-// K图（抖音图文）复用同一套规则，只换平台名和画幅；旧任务没有这两个字段，按小红书 3:4 处理。
-function adapt(text: string, platformName: string, aspect: "3:4" | "9:16") {
-  let result = platformName === "小红书" ? text : text.replaceAll("小红书", platformName).replaceAll("Xiaohongshu", "Douyin");
-  if (aspect === "9:16") result = result.replaceAll("3:4", "9:16").replaceAll("1080×1440", "1080×1920");
-  return result;
-}
-
-export function createXhsPromptPack(brief: string, options: { platformName?: string; aspect?: "3:4" | "9:16" } = {}): XhsPromptPack {
-  const platformName = options.platformName || "小红书";
-  const aspect = options.aspect || "3:4";
-  return { version: 1, brief, planning: adapt(planning, platformName, aspect), artDirection: adapt(artDirection, platformName, aspect), render: adapt(render, platformName, aspect), platformName, aspect };
+export function createXhsPromptPack(brief: string): XhsPromptPack {
+  return { version: 1, brief, planning, artDirection, render };
 }
 
 export function withXhsVisualMaster(prompt: string, master: { concept?: string; palette?: string[]; typography?: string }, pack: XhsPromptPack) {

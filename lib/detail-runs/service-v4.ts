@@ -65,7 +65,7 @@ export type V4Checkpoint = {
   promptReview?: PromptReview;
   taskTiming?: TaskTiming;
   requestTimings?: Record<string, RequestTiming>;
-  workflowVersion: 4; stage: string; plan?: WorkflowPlan; artDirection?: z.infer<typeof directionSchema>; images: Array<{ sectionId: string; title: string; state: "pending" | "generating" | "generated" | "checked" | "uncertain"; assetId?: string; correctionCount: number; check?: z.infer<typeof imageReviewSchema> }>; imageReviews: Record<string, z.infer<typeof imageReviewSchema>>; setReview?: z.infer<typeof setReviewSchema>; missingFields?: z.infer<typeof planSchema>["missingFields"]; questions?: StoredSupplementalQuestion[]; answers: string[]; attempts: Record<string, number>; timings: Record<string, { startedAt: string; finishedAt?: string }>; lastError?: { stage: string; code: string; message: string; retryable: boolean };
+  workflowVersion: 4; stage: string; plan?: WorkflowPlan; artDirection?: z.infer<typeof directionSchema>; images: Array<{ sectionId: string; title: string; state: "pending" | "generating" | "generated" | "checked" | "uncertain"; assetId?: string; correctionCount: number; redrawn?: boolean; check?: z.infer<typeof imageReviewSchema> }>; imageReviews: Record<string, z.infer<typeof imageReviewSchema>>; setReview?: z.infer<typeof setReviewSchema>; missingFields?: z.infer<typeof planSchema>["missingFields"]; questions?: StoredSupplementalQuestion[]; answers: string[]; attempts: Record<string, number>; timings: Record<string, { startedAt: string; finishedAt?: string }>; lastError?: { stage: string; code: string; message: string; retryable: boolean };
   requests?: Record<string, RequestProgress>;
   retryAuthorized?: string[];
   recoverImagesOnly?: boolean;
@@ -112,7 +112,9 @@ export async function getV4DetailRun(projectId: string, runId?: string) {
   const selectedImages = checkpoint.workflowVersion === 4 ? await prisma.pageSection.findMany({ where: { projectId }, orderBy: { order: "asc" }, select: { id: true, currentImageAssetId: true } }) : [];
   const reviewAssets = checkpoint.setReviewAssetIds || checkpoint.images?.map(image => image.assetId);
   const selectedImagesMatch = selectedImages.length === checkpoint.images?.length && selectedImages.every((section, index) => checkpoint.images[index]?.sectionId === section.id && section.currentImageAssetId === checkpoint.images[index]?.assetId && section.currentImageAssetId === reviewAssets?.[index]);
-  if (run.status === "COMPLETED" && checkpoint.workflowVersion === 4 && (!checksComplete(checkpoint) || !selectedImagesMatch)) {
+  // K图的任务可以关掉检查，用户在作品页重画、换版本也是有意为之，不因此把已完成改回部分完成。
+  const isKtu = Boolean((run.input as { xhsPromptPack?: { ktu?: unknown } } | null)?.xhsPromptPack?.ktu);
+  if (!isKtu && run.status === "COMPLETED" && checkpoint.workflowVersion === 4 && (!checksComplete(checkpoint) || !selectedImagesMatch)) {
     await prisma.detailRun.updateMany({ where: { id: run.id, status: "COMPLETED", updatedAt: run.updatedAt }, data: { status: "PARTIAL", stage: checkpoint.setReview ? "图片已生成，部分需人工检查" : "图片已生成，质量检查未完成" } });
     run = await prisma.detailRun.findUniqueOrThrow({ where: { id: run.id } });
   }
@@ -151,8 +153,9 @@ export async function createV4DetailRun(projectId: string, raw: unknown, credent
   const heroModelId = input.heroCount ? selectModel(provider.models, "hero") : undefined;
   const imageModelId = input.detailCount ? selectModel(provider.models, "detail") : heroModelId!;
   const providerSnapshot = snapshotProvider(provider);
-  const ktuSnapshot = (project.modelSnapshot as { ktu?: { aspect?: string } } | null)?.ktu;
-  const xhsPromptPack = input.mode === "xhs" ? createXhsPromptPack(project.description || "", ktuSnapshot ? { platformName: "抖音", aspect: ktuSnapshot.aspect === "9:16" ? "9:16" : "3:4" } : {}) : undefined;
+  // K图的作品建作品时就带好整套提示词（lib/ktu/prompts.ts），这里原样冻结进任务。
+  const ktuPack = (project.modelSnapshot as { ktu?: { promptPack?: XhsPromptPack } } | null)?.ktu?.promptPack;
+  const xhsPromptPack = input.mode === "xhs" ? (ktuPack ? { ...ktuPack, brief: project.description || "" } : createXhsPromptPack(project.description || "")) : undefined;
   const checkpoint: V4Checkpoint = { workflowVersion: 4, stage: "PREPARE", images: [], imageReviews: {}, answers: [], attempts: {}, timings: {}, ...(input.mode !== "xhs" ? { promptReview: { revision: 0, pages: [] } } : {}) };
   let run;
   try {
@@ -395,17 +398,17 @@ async function executeV4(runId: string) {
       ...productImages.map(asset => ({ id: asset.id, kind: asset.type, fileName: asset.fileName })),
     ];
     const sectionSlots = Array.from({ length: input.heroCount + input.detailCount }, (_, sectionIndex) => ({ sectionIndex, kind: sectionIndex < input.heroCount ? "HERO" : "DETAIL" }));
-    const coverageRules = input.mode === "xhs" ? "小红书图文仅按用户主题与配图数量创作，不要求电商八类内容覆盖；contentCoverage返回空数组。" : input.detailCount === 0
+    const coverageRules = input.mode === "xhs" ? (input.xhsPromptPack?.ktu ? "contentCoverage 返回空数组。" : "小红书图文仅按用户主题与配图数量创作，不要求电商八类内容覆盖；contentCoverage返回空数组。") : input.detailCount === 0
       ? "用户选择0张详情图，只生成指定数量的HERO，不得补充DETAIL。contentCoverage可引用承载对应内容的HERO下标；超出主图范围的模块标记not_applicable并说明用户仅要求主图，不因缺少详情图而要求补充信息。"
       : `${input.heroCount === 0 ? "用户选择0张主图，只生成指定数量的DETAIL，不得补充HERO。\n" : ""}${contentCoverageInstructions}`;
-    const planInput = JSON.stringify({ productName: current.name, description, platform: current.platform, language: input.language, userInstruction, answers: cp.answers, confirmedSupplementalAnswers: cp.confirmedSupplementalAnswers, evidenceCatalog, requestedHeroCount: input.heroCount, requestedDetailCount: input.detailCount, sectionSlots, contentCoverageRules: coverageRules, supplementalInputRules: supplementalInputInstructions });
+    const planInput = input.xhsPromptPack?.ktu ? JSON.stringify({ topic: current.name, brief: description, language: input.language, evidenceCatalog, requestedDetailCount: input.detailCount, sectionSlots }) : JSON.stringify({ productName: current.name, description, platform: current.platform, language: input.language, userInstruction, answers: cp.answers, confirmedSupplementalAnswers: cp.confirmedSupplementalAnswers, evidenceCatalog, requestedHeroCount: input.heroCount, requestedDetailCount: input.detailCount, sectionSlots, contentCoverageRules: coverageRules, supplementalInputRules: supplementalInputInstructions });
     const confirmedEstimates = cp.confirmedSupplementalAnswers?.some(answer => answer.basis === "model_estimate") === true;
     let plan = cp.plan;
     const requestPlanSchema: z.ZodType<WorkflowPlan> = input.mode === "xhs" ? xhsPlanSchema : planSchema;
     // Planning includes image input and complete page copy. Responses may send
     // headers early while still generating; allow three minutes for completion.
     if (!plan) plan = await requestOnce("PLAN", requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.planningModelId, schema: requestPlanSchema, system: input.mode === "xhs"
-      ? `${input.xhsPromptPack?.planning || ""}\n你是${input.xhsPromptPack?.platformName || "小红书"}图文规划模型。只返回 JSON。按用户主题创作标题、正文、3–8个标签和恰好${input.detailCount}张${input.xhsPromptPack?.aspect || "3:4"}竖版配图的完整文案，全部 sections.kind 为 DETAIL，不生成 HERO。post 包含 title、caption、hashtags、language，遵守用户字数与语言要求；productName 是主题名。不要编造个人经历、事实数据、品牌功效或来源。普通知识/插画创作不需要商品材质、尺寸等参数，contentCoverage 返回空数组，不套用电商详情页八模块。只有确实阻止主题创作的信息才列入 missingFields；无需补充则为空。sections[].copy 写该图可见的完整文字，evidence 只用 evidenceCatalog 内的 ID。`
+      ? input.xhsPromptPack?.ktu ? input.xhsPromptPack.planning : `${input.xhsPromptPack?.planning || ""}\n你是${input.xhsPromptPack?.platformName || "小红书"}图文规划模型。只返回 JSON。按用户主题创作标题、正文、3–8个标签和恰好${input.detailCount}张${input.xhsPromptPack?.aspect || "3:4"}竖版配图的完整文案，全部 sections.kind 为 DETAIL，不生成 HERO。post 包含 title、caption、hashtags、language，遵守用户字数与语言要求；productName 是主题名。不要编造个人经历、事实数据、品牌功效或来源。普通知识/插画创作不需要商品材质、尺寸等参数，contentCoverage 返回空数组，不套用电商详情页八模块。只有确实阻止主题创作的信息才列入 missingFields；无需补充则为空。sections[].copy 写该图可见的完整文字，evidence 只用 evidenceCatalog 内的 ID。`
       : `${buildCommerceSystemPrompt(current.platform, ["hero_search", "feature_proof", "lifestyle", "material_closeup", "specification", "trust", "summary"])}\n你是商品规划模型。只返回 JSON。写出有证据的商品事实、买家价值和完整的逐屏内容；未知字段放入 missingFields，不要设计字体、背景或工具调用。sections[].copy 是最终需要呈现的完整文案，包含标题、解释、标签与已知参数，每条独立文案换行，不写Markdown装饰或制作说明，不用只有标题的提纲代替内容。\n${input.detailCount === 0 ? coverageRules : "完整详情任务的 contentCoverage 逐项交代八类内容：covered 必须引用真实承载该内容的详情页下标（全套从0开始，不能只引用HERO）；needs_input 写明具体缺失资料；not_applicable 写明产品或用户范围依据。少屏可以合并内容模块，不允许用“简洁”“留白”作为省略理由。缺失的用户要求应进入missingFields。"}\n证据引用规则：sections[].evidence 只能填写 evidenceCatalog 中的 id（user_description 或真实资产 ID），不要填写自然语言证据句。`, input: planInput, images, timeoutMs: 180000, maxAttempts: 1, requestId, monitor: { projectId, runId, operation: "v4_plan" } }), result => { cp.plan = result; });
     if (!plan) throw new Error("规划结果为空");
     if (confirmedEstimates) plan = { ...plan, sections: plan.sections.map(section => ({ ...section, title: customerFacingCopy(section.title) || "商品信息", copy: customerFacingCopy(section.copy) })) };
@@ -440,7 +443,7 @@ async function executeV4(runId: string) {
     if (cp.lastError?.stage === "PLAN") cp.lastError = undefined;
     // For detail-page creation the model lists missing information; it cannot waive confirmation by
     // setting blocking=false. Never rewind an old run that has already paid for images.
-    const needsInput = input.mode === "create" ? plan.missingFields.length > 0 : plan.missingFields.some(field => field.blocking);
+    const needsInput = input.xhsPromptPack?.ktu ? false : input.mode === "create" ? plan.missingFields.length > 0 : plan.missingFields.some(field => field.blocking);
     const incompleteEstimates = incompleteSupplementalEstimates(cp.confirmedSupplementalAnswers);
     if (!imageRequestsStarted && ((!cp.confirmedSupplementalAnswers?.length && needsInput) || incompleteEstimates.length > 0) && !cp.answers.some(answer => answer.startsWith(SKIP_INPUT_PREFIX))) {
       cp.plan = plan;
@@ -590,11 +593,15 @@ async function executeV4(runId: string) {
       await lease.transaction(async tx => { await tx.detailRun.update({ where: { id: runId }, data: { status: "PARTIAL", stage: "已有图片恢复结束，未发起模型生成或质量检查", error: cp.lastError?.message || null, checkpoint: json(cp) } }); });
       return;
     }
-    await begin("IMAGE_REVIEW");
-    for (const progress of cp.images.filter(i => i.assetId && i.state === "generated")) {
+    // K图可以关掉出图检查：画完就算完成，不发检查请求。
+    const ktuReview = input.xhsPromptPack?.ktu;
+    const reviewOff = ktuReview?.review.enabled === false;
+    const reviewOne = async (progress: V4Checkpoint["images"][number]) => {
+      const section = sections.find(s => s.id === progress.sectionId);
+      const art = cp.artDirection?.sections.find(s => s.sectionIndex === section?.order);
       try {
         const reviewImage = await imageData(progress.assetId!, projectId);
-        await requestOnce(`IMAGE_REVIEW:${progress.sectionId}`, requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.analysisModelId || input.planningModelId, schema: imageReviewSchema, system: `你是图片质检模型。只返回 JSON。如有 approvedPrompt，以其中用户确认的构图和画面文字为准，不要求恢复原分镜的措辞；商品事实仍须核对。检查商品一致性、事实准确性、排版可读性、构图和连续性，只报告实际问题。标题同义改写、标点和换行差异不算缺陷；不要逐字对照规划文案，关注事实、参数、完整信息和可读性。${confirmedAnswerCopyRules}缺少内部来源说明不算图片缺陷。`, input: JSON.stringify({ approvedPrompt: cp.promptReview?.approvedAt ? sections.find(s => s.id === progress.sectionId)?.visualPrompt : undefined, section: sections.find(s => s.id === progress.sectionId)?.title, plan: cp.plan, art: cp.artDirection?.sections.find(s => s.sectionIndex === sections.find(s => s.id === progress.sectionId)?.order) }), images: [reviewImage], timeoutMs: 45000, maxAttempts: 1, requestId, monitor: { projectId, sectionId: progress.sectionId, runId, operation: "v4_image_review" } }), review => {
+        await requestOnce(`IMAGE_REVIEW:${progress.sectionId}${progress.redrawn ? ":redraw" : ""}`, requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.analysisModelId || input.planningModelId, schema: imageReviewSchema, system: ktuReview ? ktuReview.imageReview : `你是图片质检模型。只返回 JSON。如有 approvedPrompt，以其中用户确认的构图和画面文字为准，不要求恢复原分镜的措辞；商品事实仍须核对。检查商品一致性、事实准确性、排版可读性、构图和连续性，只报告实际问题。标题同义改写、标点和换行差异不算缺陷；不要逐字对照规划文案，关注事实、参数、完整信息和可读性。${confirmedAnswerCopyRules}缺少内部来源说明不算图片缺陷。`, input: ktuReview ? JSON.stringify({ title: section?.title, expectedText: art?.textBlocks.map(block => block.text).join("\n") || section?.copy || "", requirements: ktuReview.review.requirements }) : JSON.stringify({ approvedPrompt: cp.promptReview?.approvedAt ? sections.find(s => s.id === progress.sectionId)?.visualPrompt : undefined, section: sections.find(s => s.id === progress.sectionId)?.title, plan: cp.plan, art: cp.artDirection?.sections.find(s => s.sectionIndex === sections.find(s => s.id === progress.sectionId)?.order) }), images: [reviewImage], timeoutMs: 45000, maxAttempts: 1, requestId, monitor: { projectId, sectionId: progress.sectionId, runId, operation: "v4_image_review" } }), review => {
           const result = { ...review, passed: review.passed && !review.issues.some(issue => issue.severity === "error") };
           progress.check = result; progress.state = "checked"; cp.imageReviews[progress.sectionId] = result;
         });
@@ -602,49 +609,84 @@ async function executeV4(runId: string) {
         if (error instanceof RunHalted) throw error;
         cp.lastError = { stage: "IMAGE_REVIEW", code: isTimeout(error) ? "TIMEOUT" : "REVIEW_FAILED", message: requestErrorMessage(error, "图片检查未完成，图片已保留，请人工核对。"), retryable: false }; await persist();
       }
+    };
+    if (!reviewOff) {
+      await begin("IMAGE_REVIEW");
+      for (const progress of cp.images.filter(i => i.assetId && i.state === "generated")) await reviewOne(progress);
+      await end("IMAGE_REVIEW");
     }
-    await end("IMAGE_REVIEW");
-    await begin("SET_REVIEW");
-    const assetIds = cp.images.map(image => image.assetId || "");
-    if (cp.setReviewAssetIds && JSON.stringify(cp.setReviewAssetIds) !== JSON.stringify(assetIds)) cp.setReview = undefined;
-    cp.setReviewGroups ??= {};
-    if (cp.images.length && assetIds.every(Boolean) && !cp.setReview) {
-      // Overlap one image between groups so every adjacent page boundary is checked.
-      const groups: string[] = [];
-      for (let start = 0; start < cp.images.length; start += 11) {
-        const key = `SET_REVIEW:${start}`;
-        groups.push(key);
-        const reviewImages = cp.images.slice(start, start + 12);
-        const groupAssets = reviewImages.map(image => image.assetId!);
-        const saved = cp.setReviewGroups[key];
-        if (!saved || JSON.stringify(saved.assetIds) !== JSON.stringify(groupAssets)) {
-          if (saved) { delete cp.setReviewGroups[key]; delete cp.requests![key]; }
-          try {
-            const groupImages = await Promise.all(reviewImages.map(image => imageData(image.assetId!, projectId)));
-            // Full-plan visual checks need the same bounded wait as planning; timeout still requires explicit retry.
-            await requestOnce(key, requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.analysisModelId || input.planningModelId, schema: setReviewSchema, system: `你是整套页面检查模型。只返回 JSON。如有 approvedPrompts，以其中用户确认的构图和画面文字为准，不要求恢复原分镜的措辞；商品事实仍须核对。标题同义改写、标点和换行差异不算缺陷；只检查意思丢失、错误参数或不可读文字。依据plan.contentCoverage和逐屏copy检查实际图片的信息覆盖、商品一致性、重复构图、文字与连续性。imageOrder 给出本组图片的全套 sectionIndex，issues.sectionIndexes 必须引用这些全套下标。超过12张时分组检查，本组看不到的图片不要猜测。视觉统一不能以删除内容换取；只有内容错误、遮挡或不可读才指出具体问题。不删除图片，不要求全套改成纯色背景。${confirmedAnswerCopyRules}缺少内部来源说明不算图片缺陷。`, input: JSON.stringify({ approvedPrompts: cp.promptReview?.approvedAt ? cp.promptReview.pages : undefined, plan: cp.plan, artDirection: cp.artDirection, imageOrder: reviewImages.map((image, index) => ({ sectionIndex: start + index, title: image.title })) }), images: groupImages, timeoutMs: 180000, maxAttempts: 1, requestId, monitor: { projectId, runId, operation: "v4_set_review" } }), result => { cp.setReviewGroups![key] = { assetIds: groupAssets, result }; });
-          } catch (error) {
-            if (error instanceof RunHalted) throw error;
-            cp.lastError = { stage: "SET_REVIEW", code: isTimeout(error) ? "TIMEOUT" : "REVIEW_FAILED", message: requestErrorMessage(error, "整套检查未完成，图片已保留，请人工核对。"), retryable: false }; await persist();
-          }
+    // K图：没通过检查的图带上检查意见重画一次，再检查一次；还不合格就标「需检查」，由用户决定。
+    const redrawTargets = ktuReview && !reviewOff ? cp.images.filter(i => i.assetId && i.check && !i.check.passed && !i.redrawn) : [];
+    if (redrawTargets.length) {
+      await begin("REDRAW");
+      for (const progress of redrawTargets) {
+        const section = sections.find(s => s.id === progress.sectionId)!;
+        const key = `GENERATE:${section.id}:redraw`;
+        const prompt = `${section.visualPrompt}\nThe previous version had these problems, fix them in this version:\n${progress.check!.issues.map(issue => `- ${issue.message}`).join("\n")}`;
+        try {
+          await requestOnce(key, async requestId => {
+            const source = cp.requests![key].resultSource ?? await adapter.generateImageOnce({ model: input.imageModelId, prompt, quality: input.quality, background: settings.background, outputFormat: settings.outputFormat, outputCompression: settings.outputCompression, moderation: settings.moderation, ...(settings.size && settings.size !== "auto" ? { size: settings.size } : { aspectRatio: input.xhsPromptPack?.aspect || "3:4" }), referenceImages: visualImages, timeoutMs: 180000, monitor: { projectId, sectionId: section.id, runId, operation: "v4_image_generation" },
+              upstreamTask: cp.requests![key].upstreamTask,
+              onUpstreamTask: async task => { cp.requests![key].upstreamTask = task; await persist(); },
+              beforeSubmit: async () => { await lease.assertActive(); },
+            });
+            if (source.url) { cp.requests![key].resultSource = { url: source.url }; await persist(); }
+            const asset = await saveGeneratedImage({ projectId, sectionId: section.id, prompt, source, metadata: { runId, requestId, workflowVersion: 4, redraw: true } });
+            await lease.transaction(async tx => { await tx.pageSection.update({ where: { id: section.id }, data: { currentImageAssetId: asset.id, status: "SUCCESS" } }); }, true);
+            return asset;
+          }, asset => { progress.assetId = asset.id; progress.redrawn = true; progress.check = undefined; progress.state = "generated"; delete cp.imageReviews[section.id]; });
+        } catch (error) {
+          if (error instanceof RunHalted) throw error;
+          progress.redrawn = true;
+          cp.lastError = { stage: "REDRAW", code: isTimeout(error) ? "TIMEOUT" : "IMAGE_REQUEST_FAILED", message: requestErrorMessage(error, "重画没有完成，已保留上一版图片。"), retryable: false }; await persist();
         }
-        if (start + 12 >= cp.images.length) break;
       }
-      if (groups.every(key => JSON.stringify(cp.setReviewGroups![key]?.assetIds) === JSON.stringify(assetIds.slice(Number(key.split(":")[1]), Number(key.split(":")[1]) + 12)))) {
-        const results = groups.map(key => cp.setReviewGroups![key].result);
-        cp.setReview = { passed: results.every(result => result.passed && !result.issues.length), issues: results.flatMap(result => result.issues) };
-        cp.setReviewAssetIds = assetIds;
-      }
+      await end("REDRAW");
+      for (const progress of redrawTargets.filter(i => i.state === "generated")) await reviewOne(progress);
     }
-    await end("SET_REVIEW");
-    const complete = checksComplete(cp);
-    const reviewPending = cp.images.some(image => image.assetId && !image.check) || !cp.setReview;
+    if (!reviewOff) {
+      await begin("SET_REVIEW");
+      const assetIds = cp.images.map(image => image.assetId || "");
+      if (cp.setReviewAssetIds && JSON.stringify(cp.setReviewAssetIds) !== JSON.stringify(assetIds)) cp.setReview = undefined;
+      cp.setReviewGroups ??= {};
+      if (cp.images.length && assetIds.every(Boolean) && !cp.setReview) {
+        // Overlap one image between groups so every adjacent page boundary is checked.
+        const groups: string[] = [];
+        for (let start = 0; start < cp.images.length; start += 11) {
+          const key = `SET_REVIEW:${start}`;
+          groups.push(key);
+          const reviewImages = cp.images.slice(start, start + 12);
+          const groupAssets = reviewImages.map(image => image.assetId!);
+          const saved = cp.setReviewGroups[key];
+          if (!saved || JSON.stringify(saved.assetIds) !== JSON.stringify(groupAssets)) {
+            if (saved) { delete cp.setReviewGroups[key]; delete cp.requests![key]; }
+            try {
+              const groupImages = await Promise.all(reviewImages.map(image => imageData(image.assetId!, projectId)));
+              // Full-plan visual checks need the same bounded wait as planning; timeout still requires explicit retry.
+              await requestOnce(key, requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.analysisModelId || input.planningModelId, schema: setReviewSchema, system: ktuReview ? ktuReview.setReview : `你是整套页面检查模型。只返回 JSON。如有 approvedPrompts，以其中用户确认的构图和画面文字为准，不要求恢复原分镜的措辞；商品事实仍须核对。标题同义改写、标点和换行差异不算缺陷；只检查意思丢失、错误参数或不可读文字。依据plan.contentCoverage和逐屏copy检查实际图片的信息覆盖、商品一致性、重复构图、文字与连续性。imageOrder 给出本组图片的全套 sectionIndex，issues.sectionIndexes 必须引用这些全套下标。超过12张时分组检查，本组看不到的图片不要猜测。视觉统一不能以删除内容换取；只有内容错误、遮挡或不可读才指出具体问题。不删除图片，不要求全套改成纯色背景。${confirmedAnswerCopyRules}缺少内部来源说明不算图片缺陷。`, input: JSON.stringify({ ...(ktuReview ? { requirements: ktuReview.review.requirements, pages: cp.artDirection?.sections.map(s => ({ sectionIndex: s.sectionIndex, text: s.textBlocks.map(b => b.text).join("\n") })) } : { approvedPrompts: cp.promptReview?.approvedAt ? cp.promptReview.pages : undefined, plan: cp.plan, artDirection: cp.artDirection }), imageOrder: reviewImages.map((image, index) => ({ sectionIndex: start + index, title: image.title })) }), images: groupImages, timeoutMs: 180000, maxAttempts: 1, requestId, monitor: { projectId, runId, operation: "v4_set_review" } }), result => { cp.setReviewGroups![key] = { assetIds: groupAssets, result }; });
+            } catch (error) {
+              if (error instanceof RunHalted) throw error;
+              cp.lastError = { stage: "SET_REVIEW", code: isTimeout(error) ? "TIMEOUT" : "REVIEW_FAILED", message: requestErrorMessage(error, "整套检查未完成，图片已保留，请人工核对。"), retryable: false }; await persist();
+            }
+          }
+          if (start + 12 >= cp.images.length) break;
+        }
+        if (groups.every(key => JSON.stringify(cp.setReviewGroups![key]?.assetIds) === JSON.stringify(assetIds.slice(Number(key.split(":")[1]), Number(key.split(":")[1]) + 12)))) {
+          const results = groups.map(key => cp.setReviewGroups![key].result);
+          cp.setReview = { passed: results.every(result => result.passed && !result.issues.length), issues: results.flatMap(result => result.issues) };
+          cp.setReviewAssetIds = assetIds;
+        }
+      }
+      await end("SET_REVIEW");
+    }
+    const complete = reviewOff ? cp.images.length > 0 && cp.images.every(image => image.assetId) : checksComplete(cp);
+    const reviewPending = !reviewOff && (cp.images.some(image => image.assetId && !image.check) || !cp.setReview);
     cp.retryAuthorized = [];
     if (complete || hasResolvedReviewError(cp)) cp.lastError = undefined;
     cp.stage = complete ? "COMPLETED" : "PARTIAL";
     cp.taskTiming = touchTiming(cp.taskTiming!, true);
     await lease.transaction(async tx => { await tx.detailRun.update({ where: { id: runId }, data: {
-      status: complete ? "COMPLETED" : "PARTIAL", stage: complete ? "生成与检查已完成" : cp.images.some(image => !image.assetId) ? "部分图片未完成，已保留成功结果" : reviewPending ? "图片已生成，质量检查未完成" : "图片已生成，部分需人工检查",
+      status: complete ? "COMPLETED" : "PARTIAL", stage: complete ? (reviewOff ? "生成已完成" : "生成与检查已完成") : cp.images.some(image => !image.assetId) ? "部分图片未完成，已保留成功结果" : reviewPending ? "图片已生成，质量检查未完成" : "图片已生成，部分需人工检查",
       error: cp.lastError?.message ?? null, checkpoint: json(cp),
     } }); });
   } catch (error) {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, BookOpenText, CalendarClock, FolderKanban, History, Languages, ListOrdered, Sparkles } from "lucide-react";
+import { Bot, BookOpenText, CalendarClock, FolderKanban, History, Languages, LayoutTemplate, ListOrdered, Sparkles } from "lucide-react";
 
 import { ApiStatusIndicator } from "@/components/layout/api-status-indicator";
 import { ZhishuBadge } from "@/components/zhishu/zhishu-badge";
@@ -19,6 +19,7 @@ const homeHref = ZHISHU_MANAGED_AI ? "/ktu" : "/";
 const ktuNavItems = [
   { href: "/ktu", label: "商K宣传", icon: Sparkles },
   { href: "/ktu/library", label: "资料库", icon: ListOrdered },
+  { href: "/ktu/templates", label: "模板", icon: LayoutTemplate },
   { href: "/ktu/schedules", label: "定时任务", icon: CalendarClock },
   { href: "/ktu/works", label: "我的作品", icon: History },
 ];

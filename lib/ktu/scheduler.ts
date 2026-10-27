@@ -5,8 +5,9 @@
 import { prisma } from "@/lib/db/prisma";
 import { getDetailRun } from "@/lib/detail-runs/service";
 import { ensureZhishuProvider } from "@/lib/zhishu/connection";
-import { isTemplateKey, normalizeAspect, templateByKey, tierOrder } from "./catalog";
-import { selectVenues, selectionIssue } from "./brief";
+import { normalizeAspect, tierOrder } from "./catalog";
+import { selectVenues, selectionIssue, type BriefTemplate } from "./brief";
+import { listTemplates } from "./templates";
 import { createKtuJob, nudgeJob, stopJob } from "./jobs";
 import { exportJob } from "./export";
 import { nextRunAfter, startOfLocalDay, type ScheduleTiming } from "./schedule-time";
@@ -41,12 +42,11 @@ async function citiesInScope(scope: string, cityIds: string[], tiers: string[]) 
  */
 export function planRotation(
   cities: Array<{ id: string; name: string; venues: Array<{ id: string; name: string; district: string; sortOrder: number; lastUsedAt: Date | null }> }>,
-  templateKeys: string[],
+  templates: BriefTemplate[],
   count: number,
   cursor: Cursor,
   aspect: string,
 ): { specs: JobSpec[]; cursor: Cursor } {
-  const templates = templateKeys.filter(isTemplateKey);
   const next = { city: cursor.city || 0, template: cursor.template || 0 };
   const specs: JobSpec[] = [];
   if (!cities.length || !templates.length) return { specs, cursor: next };
@@ -54,29 +54,35 @@ export function planRotation(
   // 连续一整圈都没有可用组合时停止，避免空转
   for (let misses = 0; specs.length < count && misses < maxSteps;) {
     const city = cities[next.city % cities.length];
-    const templateKey = templates[next.template % templates.length];
+    const template = templates[next.template % templates.length];
     next.city++;
     if (next.city % cities.length === 0) next.template++;
-    if (selectionIssue(templateKey, selectVenues(templateKey, city.venues))) misses++;
-    else { specs.push({ templateKey, cityId: city.id, cityName: city.name, aspect }); misses = 0; }
+    if (selectionIssue(template, selectVenues(template, city.venues))) misses++;
+    else { specs.push({ templateKey: template.key, cityId: city.id, cityName: city.name, aspect }); misses = 0; }
   }
   return { specs, cursor: { city: next.city % cities.length, template: next.template % templates.length } };
 }
 
+/** 模板库里按给定顺序取出这些模板，已删除的跳过。 */
+async function templatesByKeys(keys: string[]) {
+  const all = await listTemplates();
+  return keys.map(key => all.find(template => template.key === key)).filter((template): template is NonNullable<typeof template> => Boolean(template));
+}
+
 /** 手动批量：选中的城市 × 模板全部排进一批。 */
 export async function startManualBatch(input: { cityIds: string[]; tiers: string[]; templateKeys: string[]; picked?: string[]; aspect?: string }) {
-  const templates = input.templateKeys.filter(isTemplateKey);
+  const templates = await templatesByKeys(input.templateKeys);
   if (!templates.length) throw new Error("请至少选择一个模板");
   const cities = await citiesInScope(input.cityIds.length ? "cities" : "tiers", input.cityIds, input.tiers);
   if (!cities.length) throw new Error("所选范围内没有城市");
   const aspect = normalizeAspect(input.aspect);
   const specs: JobSpec[] = [];
   const skipped: string[] = [];
-  for (const city of cities) for (const templateKey of templates) {
+  for (const city of cities) for (const template of templates) {
     const picked = cities.length === 1 ? input.picked : undefined;
-    const issue = selectionIssue(templateKey, selectVenues(templateKey, city.venues, picked));
+    const issue = selectionIssue(template, selectVenues(template, city.venues, picked));
     if (issue) skipped.push(`${city.name}：${issue}`);
-    else specs.push({ templateKey, cityId: city.id, cityName: city.name, picked, aspect });
+    else specs.push({ templateKey: template.key, cityId: city.id, cityName: city.name, picked, aspect });
   }
   if (!specs.length) throw new Error(skipped[0] || "资料不够生成所选模板");
   const run = await prisma.ktuScheduleRun.create({ data: { kind: "manual", planned: specs, message: skipped.length ? `跳过：${skipped.join("；")}` : null } });
@@ -96,7 +102,7 @@ async function startScheduleRun(schedule: Awaited<ReturnType<typeof prisma.ktuSc
   const doneToday = schedule.dailyLimit > 0 ? await prisma.ktuJob.count({ where: { scheduleRun: { scheduleId: schedule.id }, createdAt: { gte: startOfLocalDay(now) } } }) : 0;
   const allowance = schedule.dailyLimit > 0 ? Math.max(0, schedule.dailyLimit - doneToday) : schedule.setsPerRun;
   const cities = await citiesInScope(schedule.scope, list(schedule.cityIds), list(schedule.tiers));
-  const { specs, cursor } = planRotation(cities, list(schedule.templateKeys), Math.min(schedule.setsPerRun, allowance), (schedule.cursor ?? {}) as Cursor, schedule.aspect);
+  const { specs, cursor } = planRotation(cities, await templatesByKeys(list(schedule.templateKeys)), Math.min(schedule.setsPerRun, allowance), (schedule.cursor ?? {}) as Cursor, schedule.aspect);
   const message = !allowance ? "今天已达到每天上限，本次不生成" : !specs.length ? "范围内的城市资料不够生成所选模板" : null;
   const run = await prisma.ktuScheduleRun.create({
     data: { scheduleId: schedule.id, kind: "schedule", outputDir: schedule.outputDir, planned: specs, message, ...(specs.length ? {} : { status: "skipped", finishedAt: now }) },
@@ -133,7 +139,7 @@ async function advanceRun(runId: string) {
     }
     run = await prisma.ktuScheduleRun.update({
       where: { id: run.id },
-      data: { ...(finished ? { succeeded: { increment: 1 } } : { failed: { increment: 1 } }), message: note || !finished ? appendMessage(run.message, note || `${current.cityName}·${templateByKey(current.templateKey)?.name ?? ""}未完成：${detail?.error || detail?.stage || "任务已停止"}`) : run.message },
+      data: { ...(finished ? { succeeded: { increment: 1 } } : { failed: { increment: 1 } }), message: note || !finished ? appendMessage(run.message, note || `${current.cityName}·${current.templateName}未完成：${detail?.error || detail?.stage || "任务已停止"}`) : run.message },
     });
     await prisma.ktuJob.update({ where: { id: current.id }, data: { settledAt: new Date() } });
   }

@@ -1,4 +1,14 @@
+import type { KtuTemplateDef } from "@/lib/ktu/catalog";
+
 export type KtuCityView = { id: string; name: string; tier: string; venues: Array<{ id: string; name: string; district: string }> };
+
+export type KtuTemplateView = KtuTemplateDef & { id: string };
+
+export type KtuPageView = {
+  sectionId: string; title: string; copy: string | null; text: string; description: string; imageUrl: string | null;
+  redrawing: boolean; redrawError: string; versions: Array<{ assetId: string; imageUrl: string | null; current: boolean }>;
+  needsCheck: boolean; discarded: boolean; issues: string[];
+};
 
 export type KtuJobView = {
   id: string;
@@ -10,13 +20,14 @@ export type KtuJobView = {
   createdAt: string;
   exportedPath: string | null;
   scheduled: boolean;
+  reviewEnabled: boolean;
   state: "running" | "waiting" | "done" | "partial" | "failed" | "stopped";
   runStatus: string | null;
   stage: string;
   error: string | null;
   generated: number;
   total: number;
-  pages: Array<{ sectionId: string; title: string; copy: string | null; imageUrl: string | null; needsCheck: boolean; discarded: boolean; issues: string[] }>;
+  pages: KtuPageView[];
   post: { title: string; caption: string; hashtags: string[] } | null;
   compliance: Array<{ word: string; category: string; where: string }>;
 };

@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, ChartNoAxesCombined, Info, Palette, Settings2, UserRound } from "lucide-react";
+import { ArrowLeft, ChartNoAxesCombined, Info, Palette, Settings2, ShieldCheck, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ZHISHU_MANAGED_AI } from "@/lib/zhishu/managed";
 
-// K图：「API 配置」换成「AI 服务」，Agent 设置和 API 监控不显示。
+// K图：「API 配置」换成「AI 服务」，多一项「出图检查」；Agent 设置和 API 监控不显示。
 const hiddenWhenManaged = ["/settings/agent", "/monitor/usage"];
+const managedOnly = ["/settings/review"];
 
 export function SettingsNav({ mobile = false }: { mobile?: boolean }) {
   const pathname = usePathname();
@@ -16,11 +17,12 @@ export function SettingsNav({ mobile = false }: { mobile?: boolean }) {
     {[
       { href: "/settings/profile", label: "个人资料", icon: UserRound },
       { href: "/settings/providers", label: ZHISHU_MANAGED_AI ? "AI 服务" : "API 配置", icon: Settings2 },
+      { href: "/settings/review", label: "出图检查", icon: ShieldCheck },
       { href: "/settings/agent", label: "Agent 设置", icon: Settings2 },
       { href: "/settings/data", label: "数据管理", icon: Settings2 },
       { href: "/monitor/usage", label: "API 监控", icon: ChartNoAxesCombined },
       { href: "/settings/appearance", label: "外观", icon: Palette },
       { href: "/settings/about", label: "关于", icon: Info },
-    ].filter(({ href }) => !ZHISHU_MANAGED_AI || !hiddenWhenManaged.includes(href)).map(({ href, label, icon: Icon }) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined} className={cn("flex shrink-0 items-center whitespace-nowrap text-sm transition-colors", mobile ? "gap-2 rounded-xl px-3 py-2" : "gap-3 rounded-2xl px-4 py-3", pathname === href ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}><Icon aria-hidden="true" className="h-4 w-4" />{label}</Link>)}
+    ].filter(({ href }) => ZHISHU_MANAGED_AI ? !hiddenWhenManaged.includes(href) : !managedOnly.includes(href)).map(({ href, label, icon: Icon }) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined} className={cn("flex shrink-0 items-center whitespace-nowrap text-sm transition-colors", mobile ? "gap-2 rounded-xl px-3 py-2" : "gap-3 rounded-2xl px-4 py-3", pathname === href ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}><Icon aria-hidden="true" className="h-4 w-4" />{label}</Link>)}
   </nav>;
 }

@@ -20,7 +20,7 @@ export const metadata: Metadata = {
   metadataBase: publicSiteUrl(),
   title: { default: productTitle, template: `%s · ${ZHISHU_MANAGED_AI ? "K图" : "MxPage"}` },
   applicationName: ZHISHU_MANAGED_AI ? "K图" : "MxPage",
-  keywords: ["MxPage", "AI电商详情页", "商品主图生成", "图片翻译", "小红书图文", "AI product images", "self-hosted"],
+  keywords: ZHISHU_MANAGED_AI ? ["K图", "商K宣传", "抖音图文", "KTV排行榜", "商K推荐"] : ["MxPage", "AI电商详情页", "商品主图生成", "图片翻译", "小红书图文", "AI product images", "self-hosted"],
   authors: [{ name: "灵矩绘境", url: "https://github.com/ziguishian/MxPage" }],
   robots: { index: false, follow: false },
   openGraph: { type: "website", locale: "zh_CN", siteName: ZHISHU_MANAGED_AI ? "K图" : "MxPage", title: productTitle, description: productDescription },

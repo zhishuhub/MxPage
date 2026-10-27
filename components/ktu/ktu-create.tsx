@@ -6,10 +6,10 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { KTU_TEMPLATES, KTU_TIERS } from "@/lib/ktu/catalog";
+import { describeTemplate, KTU_TIERS } from "@/lib/ktu/catalog";
 import { cn } from "@/lib/utils";
 import { api, formatTime, useSchedulerTick } from "./api";
-import { JOB_STATE_LABEL, type KtuBatchView, type KtuCityView, type KtuJobView } from "./types";
+import { JOB_STATE_LABEL, type KtuBatchView, type KtuCityView, type KtuJobView, type KtuTemplateView } from "./types";
 
 const chip = (active: boolean) => cn("rounded-xl border px-3 py-2 text-sm transition-colors", active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background hover:bg-accent");
 
@@ -19,17 +19,21 @@ export function KtuCreate() {
   const [scope, setScope] = useState<"cities" | "tiers">("cities");
   const [cityIds, setCityIds] = useState<string[]>([]);
   const [tiers, setTiers] = useState<string[]>([]);
-  const [templates, setTemplates] = useState<string[]>(KTU_TEMPLATES.map(template => template.key));
+  const [library, setLibrary] = useState<KtuTemplateView[] | null>(null);
+  const [templates, setTemplates] = useState<string[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [aspect, setAspect] = useState<"3:4" | "9:16">("3:4");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api.get<KtuCityView[]>("/api/ktu/cities").then(setCities).catch(error => toast.error(error.message)); }, []);
+  useEffect(() => {
+    api.get<KtuCityView[]>("/api/ktu/cities").then(setCities).catch(error => toast.error(error.message));
+    api.get<KtuTemplateView[]>("/api/ktu/templates").then(list => { setLibrary(list); setTemplates(list.map(template => template.key)); }).catch(error => toast.error(error.message));
+  }, []);
 
   const toggle = (list: string[], value: string) => list.includes(value) ? list.filter(item => item !== value) : [...list, value];
   const scopedCities = useMemo(() => (cities ?? []).filter(city => scope === "cities" ? cityIds.includes(city.id) : tiers.includes(city.tier)), [cities, scope, cityIds, tiers]);
   const singleCity = scope === "cities" && scopedCities.length === 1 ? scopedCities[0] : null;
-  const canPick = singleCity && templates.some(key => key === "recommend" || key === "single");
+  const canPick = Boolean(singleCity);
   const total = scopedCities.length * templates.length;
 
   const start = async () => {
@@ -73,16 +77,16 @@ export function KtuCreate() {
     </div>
 
     <div className="space-y-3">
-      <h2 className="font-semibold">模板</h2>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {KTU_TEMPLATES.map(template => <button key={template.key} type="button" onClick={() => setTemplates(toggle(templates, template.key))} className={cn("rounded-2xl border p-4 text-left transition-colors", templates.includes(template.key) ? "border-primary ring-1 ring-primary" : "border-border hover:bg-accent")}>
-          <p className="font-medium">{template.name}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{template.summary}</p>
+      <div className="flex items-center gap-2"><h2 className="font-semibold">模板</h2><Link href="/ktu/templates" className="ml-auto text-sm text-muted-foreground underline hover:text-foreground">改模板、加模板</Link></div>
+      {!library ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /> : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {library.map(template => <button key={template.key} type="button" onClick={() => setTemplates(toggle(templates, template.key))} className={cn("rounded-2xl border p-4 text-left transition-colors", templates.includes(template.key) ? "border-primary ring-1 ring-primary" : "border-border hover:bg-accent")}>
+          <p className="font-medium">{template.name}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{describeTemplate(template)}</p>
         </button>)}
-      </div>
+      </div>}
     </div>
 
     {canPick && singleCity && <div className="space-y-3">
-      <h2 className="font-semibold">指定店铺<span className="ml-2 text-sm font-normal text-muted-foreground">选填，用于精选推荐和单个商K介绍；不选就自动轮换</span></h2>
+      <h2 className="font-semibold">指定店铺<span className="ml-2 text-sm font-normal text-muted-foreground">选填，指定后所选模板只用这些店；不选就按模板自动挑</span></h2>
       <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">{singleCity.venues.map(venue => <button key={venue.id} type="button" className={chip(picked.includes(venue.id))} onClick={() => setPicked(toggle(picked, venue.id))}>{venue.name}</button>)}</div>
     </div>}
 
