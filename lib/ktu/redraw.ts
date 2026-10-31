@@ -2,16 +2,16 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { getDetailRun } from "@/lib/detail-runs/service";
-import type { ImageGenerationRequest } from "@/lib/ai/provider-client";
 import { getProviderAdapter, type ProviderSnapshot } from "@/lib/services/provider-service";
 import { saveGeneratedImage } from "@/lib/storage/asset-manager";
+import { KTU_IMAGE_QUALITY } from "./catalog";
 import { RUN_ACTIVE } from "./jobs";
 
 const EXACT_COPY = "\nUse the following Exact copy as the sole source of visible text. It overrides any conflicting wording in the visual description; do not rephrase, omit or add claims.\nExact copy:\n";
 const COMPOSITION = "Page composition:\n";
 
 type ArtDirection = { prompt?: string; textBlocks?: Array<Record<string, unknown> & { text: string }> };
-type RunInput = { imageModelId?: string; providerSnapshot?: ProviderSnapshot; imageSettings?: { size?: string }; quality?: ImageGenerationRequest["quality"]; xhsPromptPack?: { aspect?: "3:4" | "9:16" } };
+type RunInput = { imageModelId?: string; providerSnapshot?: ProviderSnapshot; imageSettings?: { size?: string }; xhsPromptPack?: { aspect?: "3:4" | "9:16" } };
 
 const state = globalThis as typeof globalThis & { ktuRedrawing?: Set<string> };
 const redrawing = (state.ktuRedrawing ??= new Set());
@@ -61,7 +61,7 @@ async function draw(projectId: string, sectionId: string, prompt: string, input:
     const { adapter } = await getProviderAdapter(input.providerSnapshot?.id, input.providerSnapshot);
     const size = input.imageSettings?.size;
     const source = await adapter.generateImageOnce({
-      model: input.imageModelId || "image", prompt, quality: input.quality,
+      model: input.imageModelId || "image", prompt, quality: KTU_IMAGE_QUALITY,
       ...(size && size !== "auto" ? { size } : { aspectRatio: input.xhsPromptPack?.aspect || "3:4" }),
       timeoutMs: 180000, monitor: { projectId, sectionId, operation: "ktu_redraw" },
     });

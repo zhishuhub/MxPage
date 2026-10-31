@@ -121,6 +121,8 @@ export function normalizeAspect(value: unknown): KtuAspect {
 export function aspectImageSize(aspect: KtuAspect) {
   return aspect === "9:16" ? "1152x2048" : "1152x1536";
 }
+/** 生图固定用高画质；不传时接口按「自动」由上游自己挑档，出图比 ChatGPT 里差。 */
+export const KTU_IMAGE_QUALITY = "high" as const;
 
 const DISTRICT_SUFFIX = /(?:区|县|市|镇|新城|开发区|商圈)$/;
 

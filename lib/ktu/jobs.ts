@@ -10,7 +10,7 @@ import { invokeStructured } from "@/lib/detail-runs/structured-model";
 import { getProviderAdapter, type ProviderSnapshot } from "@/lib/services/provider-service";
 import { assetPublicUrl, removeProjectFiles } from "@/lib/storage/asset-manager";
 import { ZHISHU_CHAT_MODEL, zhishuCredentials } from "@/lib/zhishu/connection-file";
-import { aspectImageSize, builtinTemplate, normalizeAspect, type KtuAspect } from "./catalog";
+import { aspectImageSize, builtinTemplate, KTU_IMAGE_QUALITY, normalizeAspect, type KtuAspect } from "./catalog";
 import { buildJobPlan, type BriefTemplate } from "./brief";
 import { checkPost, type ComplianceHit } from "./compliance";
 import { createKtuPromptPack } from "./prompts";
@@ -40,6 +40,7 @@ export async function createKtuJob(input: { templateKey: string; template?: Brie
       heroCount: 0,
       detailCount: plan.pageCount,
       imageSettings: { size: aspectImageSize(aspect) },
+      quality: KTU_IMAGE_QUALITY,
       instruction: "",
     }, zhishuCredentials());
     return job;
