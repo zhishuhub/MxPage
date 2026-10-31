@@ -73,6 +73,59 @@ jobs:
           ulimit -n 65536
           npx --no-install electron-builder ${{ matrix.flags }} --publish never
       - run: npm run smoke:desktop
+      # 真实安装一遍：和上一版比安装用时、装出的文件数；再从装好的目录启动内置服务打开几个页面
+      # （安装目录外层没有 node_modules，能确认精简依赖后不缺东西）。
+      - name: Install and compare (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          function Measure-Install($exe, $dir) {
+            $time = Measure-Command { Start-Process -FilePath $exe -ArgumentList "/S", "/D=$dir" -Wait }
+            $files = Get-ChildItem $dir -Recurse -File
+            [pscustomobject]@{ Seconds = [math]::Round($time.TotalSeconds, 1); Files = $files.Count; MB = [math]::Round(($files | Measure-Object Length -Sum).Sum / 1MB) }
+          }
+          $rows = @()
+          $previous = gh release list --repo $env:GITHUB_REPOSITORY --limit 1 --json tagName --jq ".[0].tagName"
+          if ($previous) {
+            gh release download $previous --repo $env:GITHUB_REPOSITORY --pattern "*.exe" --dir "$env:RUNNER_TEMP\previous"
+            $oldExe = (Get-ChildItem "$env:RUNNER_TEMP\previous\*.exe")[0].FullName
+            $oldDir = "$env:RUNNER_TEMP\ktu-previous"
+            $old = Measure-Install $oldExe $oldDir
+            $rows += "| $previous | $($old.Seconds) 秒 | $($old.Files) | $($old.MB) MB |"
+            Start-Process -FilePath "$oldDir\Uninstall KTu.exe" -ArgumentList "/S" -Wait
+            for ($i = 0; $i -lt 60 -and (Test-Path "$oldDir\KTu.exe"); $i++) { Start-Sleep -Seconds 1 }
+          }
+          $newExe = (Get-ChildItem "dist-desktop\KTu-*.exe")[0].FullName
+          $newDir = "$env:RUNNER_TEMP\ktu-new"
+          $new = Measure-Install $newExe $newDir
+          $rows += "| $env:GITHUB_REF_NAME | $($new.Seconds) 秒 | $($new.Files) | $($new.MB) MB |"
+          @("### Windows 安装对比", "", "| 版本 | 安装用时 | 文件数 | 体积 |", "|---|---|---|---|") + $rows | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          $rows | ForEach-Object { Write-Host $_ }
+
+          $standalone = "$newDir\resources\app\.next-desktop\standalone"
+          $data = "$env:RUNNER_TEMP\ktu-installed-data"
+          New-Item -ItemType Directory -Force $data | Out-Null
+          $env:ELECTRON_RUN_AS_NODE = "1"; $env:NODE_ENV = "production"; $env:APP_RUNTIME = "desktop"
+          $env:APP_USER_DATA_DIR = $data; $env:APP_SECRET = "installed-check-secret"; $env:STORAGE_ROOT = "$data\storage"
+          $env:DATABASE_URL = "file:" + ("$data\check.db" -replace "\\", "/"); $env:HOSTNAME = "127.0.0.1"; $env:PORT = "3917"
+          & "$newDir\KTu.exe" "$standalone\scripts\apply-prisma-migrations.cjs"
+          if ($LASTEXITCODE -ne 0) { throw "数据库迁移失败" }
+          & "$newDir\KTu.exe" "$newDir\resources\app\scripts\check-agent-driver.cjs" "$newDir\resources\app"
+          if ($LASTEXITCODE -ne 0) { throw "Agent 驱动检查失败" }
+          $server = Start-Process -FilePath "$newDir\KTu.exe" -ArgumentList "`"$standalone\server.js`"" -WorkingDirectory $standalone -PassThru -NoNewWindow
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 60 -and -not $ready; $i++) { Start-Sleep -Seconds 1; try { $ready = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://127.0.0.1:3917/api/zhishu/status").StatusCode -eq 200 } catch { } }
+            if (-not $ready) { throw "装好的程序内置服务没有启动" }
+            foreach ($route in "/ktu", "/ktu/schedules", "/ktu/works", "/settings/review", "/api/ktu/templates", "/api/ktu/import/template", "/api/ktu/jobs", "/api/ktu/batches") {
+              $status = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 "http://127.0.0.1:3917$route").StatusCode
+              if ($status -ne 200) { throw "$route 返回 $status" }
+              Write-Host "PASS installed $route"
+            }
+          } finally { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}

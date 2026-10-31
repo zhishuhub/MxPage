@@ -21,11 +21,70 @@ let agentBroker = null;
 let ktuDesktop = null;
 const startHidden = launchedHidden();
 
-// 只允许运行一个 K图：再次打开时把已有窗口叫出来（定时任务不会被重复执行）
+// 只允许运行一个 K图：再次打开时把已有窗口叫出来（定时任务不会被重复执行）。
+// 升级时旧版可能还在后台（装到了别的目录、或没被安装程序关掉），它的文件却已被换掉或删掉，页面会报 404；
+// 所以叫出窗口前先看磁盘上装的版本，变了就用新装的程序重启。
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => showWindow());
+  app.on("second-instance", (_event, argv) => {
+    const state = installState();
+    const launched = launchedVersion(argv?.[0]);
+    // 用户刚点开的程序更新（新版装到了别的目录），也切到它；点的是旧快捷方式就不动
+    if (state === "same" && !(launched && isNewerVersion(launched, app.getVersion()))) showWindow();
+    else void restartIntoInstalledVersion(state === "same" ? "changed" : state, argv?.[0]);
+  });
+}
+
+/** 0.3.3-zs.6 这类版本号逐段按数字比较，a 比 b 新返回 true。 */
+function isNewerVersion(a, b) {
+  const parts = value => String(value).split(/\D+/).filter(Boolean).map(Number);
+  const left = parts(a), right = parts(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    if ((left[i] ?? 0) !== (right[i] ?? 0)) return (left[i] ?? 0) > (right[i] ?? 0);
+  }
+  return false;
+}
+
+/** 用户刚点开的那个程序的版本（Windows：同目录 resources/app；macOS：.app/Contents/Resources/app），读不到返回 null。 */
+function launchedVersion(exe) {
+  if (!app.isPackaged || typeof exe !== "string") return null;
+  const dir = path.dirname(exe);
+  for (const file of [path.join(dir, "resources", "app", "package.json"), path.join(dir, "..", "Resources", "app", "package.json")]) {
+    try { return JSON.parse(fs.readFileSync(file, "utf8")).version; } catch { /* 换下一个位置 */ }
+  }
+  return null;
+}
+
+/** 正在运行的版本和磁盘上的是否一致：same 一致，changed 已装了别的版本，removed 安装目录已被删掉。 */
+function installState() {
+  if (!app.isPackaged) return "same";
+  try {
+    const installed = JSON.parse(fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8")).version;
+    return installed === app.getVersion() ? "same" : "changed";
+  } catch {
+    return "removed";
+  }
+}
+
+let restarting = false;
+/**
+ * 停掉内置服务，退出旧进程，用新装的程序重新打开：优先用用户刚点开的那个程序；原地升级（changed）时原路径就是新程序。
+ * 旧安装目录已被删掉（removed）时原路径上只剩旧程序，不能再启动它，找不到新程序就提示用户再点一次图标。
+ */
+async function restartIntoInstalledVersion(state, launchedExe) {
+  if (restarting) return;
+  restarting = true;
+  isQuitting = true;
+  app.isQuitting = true;
+  ktuDesktop?.stop();
+  await shutdownServerProcess();
+  await agentBroker?.close().catch(() => undefined);
+  const candidates = state === "changed" ? [launchedExe, process.execPath] : [launchedExe];
+  const execPath = candidates.find(file => typeof file === "string" && fs.existsSync(file));
+  if (execPath) app.relaunch({ execPath });
+  else dialog.showMessageBoxSync({ type: "info", title: "K图", message: "K图 已更新到新版本，请再点一次图标打开。" });
+  app.exit(0);
 }
 
 function getWindowIcon() {
@@ -40,8 +99,13 @@ function getTrayIcon() {
     : path.join(__dirname, "../public/brand-icon.png");
 }
 
-/** 把窗口叫到前台；route 给定时跳到对应页面。 */
+/** 把窗口叫到前台；route 给定时跳到对应页面。托盘、通知点进来时也先看版本有没有变。 */
 function showWindow(route) {
+  const state = installState();
+  if (state !== "same") {
+    void restartIntoInstalledVersion(state);
+    return;
+  }
   if (!mainWindow) {
     if (serverUrl) void createMainWindow(serverUrl, route);
     return;
@@ -507,12 +571,13 @@ async function bootstrapDesktopApp() {
   console.timeEnd("desktop:total");
 }
 
-app.on("before-quit", async () => {
+// 先停内置服务再关 Agent：before-quit 不会等异步处理做完，放在 await 后面的停止可能来不及执行，留下后台服务进程。
+app.on("before-quit", () => {
   isQuitting = true;
   app.isQuitting = true;
   ktuDesktop?.stop();
-  await agentBroker?.close();
-  await shutdownServerProcess();
+  void shutdownServerProcess();
+  void agentBroker?.close();
 });
 
 app.on("window-all-closed", () => {
