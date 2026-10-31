@@ -27,6 +27,7 @@ import { workflowReferenceAssets } from "@/lib/utils/asset-purpose";
 import { claimRunLease, RunHalted, RUN_LEASE_MS } from "./run-lease";
 import { isStructuredSchemaRejection, requestErrorMessage } from "@/lib/utils/request-error";
 import { networkErrorCode } from "@/lib/utils/network-error";
+import { noteProviderOk, noteProviderStrain } from "@/lib/ktu/throttle";
 import { incompleteSupplementalEstimates, missingFieldSchema, normalizeSupplementalQuestions, resolveSupplementalSubmission, supplementalInputInstructions, supplementalQuestionsFromFields, supplementalQuestionIssues, supplementalSuggestionsSchema, type StoredSupplementalQuestion } from "./supplemental-input";
 
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -59,6 +60,22 @@ const xhsPlanSchema = planSchema.extend({ post: socialPostSchema });
 type WorkflowPlan = z.infer<typeof planSchema> & { post?: z.infer<typeof socialPostSchema> };
 const imageReviewSchema = z.object({ passed: z.boolean(), issues: z.array(z.object({ kind: z.enum(["identity", "copy", "layout", "typography", "continuity"]), message: z.string().min(1).max(500), severity: z.enum(["warning", "error"]) })).max(10) });
 const setReviewSchema = z.object({ passed: z.boolean(), issues: z.array(z.object({ sectionIndexes: z.array(z.number().int().nonnegative()).min(1), message: z.string().min(1).max(500) })).max(8) });
+// K图：发布文案、每张图的文字和画面一次返回。
+const ktuComposeSchema = (pageCount: number) => z.object({
+  post: socialPostSchema,
+  concept: directionSchema.shape.concept, palette: directionSchema.shape.palette, typography: directionSchema.shape.typography,
+  sections: z.array(z.object({ title: z.string().min(1).max(100), copy: z.string().max(1600), prompt: z.string().min(1).max(5000), textBlocks: directionSchema.shape.sections.element.shape.textBlocks })).length(pageCount),
+});
+type KtuComposed = z.infer<ReturnType<typeof ktuComposeSchema>>;
+function composedPlan(result: KtuComposed, topic: string): WorkflowPlan {
+  return {
+    productName: topic.slice(0, 100) || "商K宣传", category: "商K宣传", facts: [], contentCoverage: [], requirements: [], missingFields: [], post: result.post,
+    sections: result.sections.map(section => ({ kind: "DETAIL" as const, title: section.title, objective: section.title, buyerQuestion: "", copy: section.copy, evidence: ["user_description"] })),
+  };
+}
+function composedArt(result: KtuComposed): z.infer<typeof directionSchema> {
+  return { concept: result.concept, palette: result.palette, typography: result.typography, sections: result.sections.map((section, sectionIndex) => ({ sectionIndex, expression: "statement" as const, prompt: section.prompt, textBlocks: section.textBlocks })) };
+}
 
 type RequestProgress = { state: "running" | "completed" | "uncertain" | "rejected"; requestId: string; error?: string; failureCode?: string; resultSource?: { url: string; mimeType?: string | null }; upstreamTask?: UpstreamImageTask };
 export type V4Checkpoint = {
@@ -67,6 +84,8 @@ export type V4Checkpoint = {
   requestTimings?: Record<string, RequestTiming>;
   workflowVersion: 4; stage: string; plan?: WorkflowPlan; artDirection?: z.infer<typeof directionSchema>; images: Array<{ sectionId: string; title: string; state: "pending" | "generating" | "generated" | "checked" | "uncertain"; assetId?: string; correctionCount: number; redrawn?: boolean; check?: z.infer<typeof imageReviewSchema> }>; imageReviews: Record<string, z.infer<typeof imageReviewSchema>>; setReview?: z.infer<typeof setReviewSchema>; missingFields?: z.infer<typeof planSchema>["missingFields"]; questions?: StoredSupplementalQuestion[]; answers: string[]; attempts: Record<string, number>; timings: Record<string, { startedAt: string; finishedAt?: string }>; lastError?: { stage: string; code: string; message: string; retryable: boolean };
   requests?: Record<string, RequestProgress>;
+  /** K图一次写好的画面，设计画面这一步取用后清掉。 */
+  ktuArt?: z.infer<typeof directionSchema>;
   retryAuthorized?: string[];
   recoverImagesOnly?: boolean;
   setReviewGroups?: Record<string, { assetIds: string[]; result: z.infer<typeof setReviewSchema> }>;
@@ -96,6 +115,23 @@ async function assertIdle(projectId: string) {
 function isTimeout(error: unknown) {
   const value = error as { name?: string; code?: string; message?: string } | null;
   return /timeout|timed out|abort/i.test(`${value?.name || ""} ${value?.code || ""} ${value?.message || String(error)}`);
+}
+function httpStatus(error: unknown) {
+  const value = error as { status?: number; statusCode?: number } | null;
+  return value?.status ?? value?.statusCode ?? 0;
+}
+/** 网站那头忙不过来的迹象：超时、断网、限流、5xx。K图据此自动减少同时生成的套数。 */
+function providerStrained(error: unknown) {
+  const status = httpStatus(error);
+  return isTimeout(error) || Boolean(networkErrorCode(error)) || status === 429 || status >= 500 || /\b50[234]\b|rate limit|繁忙/i.test((error as { message?: string } | null)?.message || "");
+}
+/** K图当场重试一次的失败：偶发的超时、断网、繁忙和返回格式不对；额度、鉴权、内容被拒这类重试也没用。 */
+function retryableOnce(error: unknown) {
+  if (error instanceof RunHalted || error instanceof InvalidStoryboard || isStructuredSchemaRejection(error)) return false;
+  const value = error as { code?: string; message?: string } | null;
+  const status = httpStatus(error);
+  if (value?.code === "LOCAL_BUDGET_PAUSED" || [400, 401, 402, 403, 404].includes(status) || /quota|额度|余额|insufficient|unauthorized/i.test(`${value?.code || ""} ${value?.message || ""}`)) return false;
+  return providerStrained(error) || error instanceof z.ZodError || error instanceof SyntaxError || /fetch failed|network|terminated|socket|ECONNRESET/i.test(value?.message || "");
 }
 function checksComplete(cp: V4Checkpoint) {
   return cp.images.length > 0 && cp.images.every(image => image.assetId && image.state === "checked" && image.check?.passed === true && !image.check.issues.some(issue => issue.severity === "error")) && cp.setReview?.passed === true && cp.setReview.issues.length === 0;
@@ -343,15 +379,17 @@ async function executeV4(runId: string) {
   };
   const begin = async (stage: string) => { await lease.assertActive(); cp.stage = stage; cp.timings[stage] ??= { startedAt: new Date().toISOString() }; await persist(stage); };
   const end = (stage: string) => { if (cp.timings[stage]) cp.timings[stage].finishedAt = new Date().toISOString(); return persist(); };
+  const ktuMode = Boolean(input.xhsPromptPack?.ktu);
   const requestOnce = async <T>(key: string, invoke: (requestId: string) => Promise<T>, save: (result: T) => void) => {
     await lease.assertActive();
     const previous = cp.requests![key];
     const queryExisting = key.startsWith("GENERATE:") && (previous?.resultSource || (previous?.upstreamTask && previous.upstreamTask.status !== "failed"));
     const authorized = cp.retryAuthorized?.includes(key);
     if (cp.recoverImagesOnly && !queryExisting) throw new Error("仅恢复已有图片：未发起新的模型请求，请单独确认后继续任务。");
-    if (previous && previous.state !== "rejected" && !authorized && !queryExisting) throw new Error(`${key} 上次请求结果未确认，已跳过；如需重新请求，请勾选可能再次计费的重试选项。`);
+    // K图：用户接受多耗额度，上次没拿到结果的请求直接重发，不要求再确认。
+    if (previous && previous.state !== "rejected" && !authorized && !queryExisting && !ktuMode) throw new Error(`${key} 上次请求结果未确认，已跳过；如需重新请求，请勾选可能再次计费的重试选项。`);
     cp.retryAuthorized = cp.retryAuthorized?.filter(item => item !== key);
-    const requestId = queryExisting ? previous!.requestId : randomUUID();
+    let requestId = queryExisting ? previous!.requestId : randomUUID();
     cp.requests![key] = { state: "running", requestId, ...(queryExisting ? { upstreamTask: previous!.upstreamTask, resultSource: previous!.resultSource } : {}) };
     const previousTiming = cp.requestTimings![key];
     const timing = startTiming(previousTiming);
@@ -359,14 +397,27 @@ async function executeV4(runId: string) {
     if (!queryExisting) cp.attempts[key] = (cp.attempts[key] || 0) + 1;
     await persist();
     await lease.assertActive();
-    try {
+    for (let attempt = 0; ; attempt++) try {
       const result = await invoke(requestId);
       save(result);
       cp.requestTimings![key] = { ...cp.requestTimings![key], ...touchTiming(cp.requestTimings![key], true) };
       cp.requests![key] = { ...cp.requests![key], state: "completed", requestId };
       await persist();
+      if (ktuMode) noteProviderOk();
       return result;
     } catch (error) {
+      if (ktuMode && providerStrained(error)) noteProviderStrain();
+      // K图：超时、断网、繁忙、返回格式不对这类偶发失败当场换个请求编号重试一次；已拿到的图片地址保留，只重新下载。
+      if (ktuMode && attempt === 0 && !queryExisting && retryableOnce(error)) {
+        await new Promise(resolve => setTimeout(resolve, (error as { status?: number })?.status === 429 ? 8000 : 3000));
+        await lease.assertActive();
+        const resultSource = cp.requests![key]?.resultSource;
+        requestId = randomUUID();
+        cp.requests![key] = { state: "running", requestId, ...(resultSource ? { resultSource } : {}) };
+        cp.attempts[key] = (cp.attempts[key] || 0) + 1;
+        await persist();
+        continue;
+      }
       const originalCode = (error as { code?: string })?.code;
       if (!originalCode || networkErrorCode(error) === originalCode) {
         if (networkErrorCode(error) || /fetch failed|network error|terminated|timeout|timed out/i.test(error instanceof Error ? error.message : "")) {
@@ -391,7 +442,10 @@ async function executeV4(runId: string) {
     const images = await Promise.all(productImages.map(a => imageData(a.id, projectId)));
     const visualImages = [...images, ...await Promise.all(styleImages.map(a => imageData(a.id, projectId)))];
     const referenceRoles = styleImages.length ? `参考图片按顺序：前${images.length}张是唯一商品身份与外观证据；其后${styleImages.length}张仅为风格参考，用于光线、色调、构图、细节放大和信息密度。风格参考中的文字、承诺、规格、商品结构不可作为事实或照抄；商品结构以原始商品图为准。` : "";
-    await begin("PLAN");
+    // K图新任务带 compose：文案和画面一次请求写完，少等一轮；老任务仍分两步。
+    const compose = cp.plan ? undefined : input.xhsPromptPack?.ktu?.compose;
+    const planStage = compose ? "COMPOSE" : "PLAN";
+    await begin(planStage);
     const description = input.xhsPromptPack?.brief ?? current.description;
     const evidenceCatalog = [
       { id: "user_description", kind: "description", text: description || "" },
@@ -405,6 +459,13 @@ async function executeV4(runId: string) {
     const confirmedEstimates = cp.confirmedSupplementalAnswers?.some(answer => answer.basis === "model_estimate") === true;
     let plan = cp.plan;
     const requestPlanSchema: z.ZodType<WorkflowPlan> = input.mode === "xhs" ? xhsPlanSchema : planSchema;
+    if (!plan && compose) {
+      const pageCount = input.heroCount + input.detailCount;
+      plan = await requestOnce("COMPOSE", requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.planningModelId, schema: ktuComposeSchema(pageCount), system: compose, input: planInput, images, timeoutMs: Math.max(120000, Math.min(240000, pageCount * 30000)), maxAttempts: 1, requestId, monitor: { projectId, runId, operation: "ktu_compose" } }), result => {
+        cp.plan = composedPlan(result, current.name);
+        cp.ktuArt = composedArt(result);
+      }).then(() => cp.plan!);
+    }
     // Planning includes image input and complete page copy. Responses may send
     // headers early while still generating; allow three minutes for completion.
     if (!plan) plan = await requestOnce("PLAN", requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.planningModelId, schema: requestPlanSchema, system: input.mode === "xhs"
@@ -490,10 +551,16 @@ async function executeV4(runId: string) {
         create: { projectId, sectionKey: `v4-${index}`, type: section.kind === "HERO" ? "HERO" : "CUSTOM", title: section.title, goal: section.objective, copy: section.copy, visualPrompt: `${section.objective}\n${section.copy}`, order: index, editableData: json({ workflowVersion: 4, evidence: section.evidence }) },
       });
     });
-    await end("PLAN");
+    await end(planStage);
     await begin("ART_DIRECTION");
+    // K图：画面已随文案一次写好时直接用；不合格就退回单独设计画面这一步。
+    const ktuArt = () => {
+      const draft = cp.ktuArt;
+      cp.ktuArt = undefined;
+      return draft && !storyboardIssue(draft.sections, expected) ? draft : undefined;
+    };
     const requestDirectionSchema = directionSchema.extend({ sections: directionSchema.shape.sections.length(expected) });
-    const art = cp.artDirection ?? await requestOnce("ART_DIRECTION", requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.planningModelId, schema: requestDirectionSchema, system: input.xhsPromptPack?.artDirection || `${buildCommerceSystemPrompt(current.platform, ["hero_search", "feature_proof", "lifestyle", "material_closeup", "specification", "trust", "summary"])}\n${confirmedAnswerCopyRules}\n你是视觉分镜模型。只返回完整 JSON。根据完整内容任务设计每张图的构图、光线、场景、文字和信息模块，sectionIndex必须对应规划从0开始的下标。plan.sections[].copy 是内容基础，可以自然润色标题、调整句式、标点和换行，无需逐字复刻；保持完整买家信息、参数标签、数值、单位和尺寸表，不把完整页面简化成只有标题。不要删除页面，不要编造规格。每张最终prompt必须完整描述主体、镜头、环境、光线、配色、细节/信息模块与排版，最终可见文字以textBlocks为准；不能只写标题或依赖前一张图。按内容安排场景、微距、标注、信息图与规格表，避免所有页面同一背景加整件产品。`, input: JSON.stringify({ plan, expectedSectionCount: expected, sectionSlots, sectionIndexRule: "Return exactly one section per slot, with unique sectionIndex from 0 to expectedSectionCount - 1. Do not merge or omit slots.", platform: current.platform, language: input.language, userInstruction, referenceRoles, brief: input.xhsPromptPack?.brief }), images: visualImages, timeoutMs: Math.max(90000, Math.min(180000, expected * 15000)), maxAttempts: 1, requestId, monitor: { projectId, runId, operation: "v4_art_direction" } }).catch(error => { if (error instanceof z.ZodError) throw new InvalidStoryboard(`视觉分镜结构不合格，需要 ${expected} 张完整分镜。请确认后仅重试分镜，已完成规划会保留。`); throw error; }), result => { cp.artDirection = result; });
+    const art = cp.artDirection ?? ktuArt() ?? await requestOnce("ART_DIRECTION", requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.planningModelId, schema: requestDirectionSchema, system: input.xhsPromptPack?.artDirection || `${buildCommerceSystemPrompt(current.platform, ["hero_search", "feature_proof", "lifestyle", "material_closeup", "specification", "trust", "summary"])}\n${confirmedAnswerCopyRules}\n你是视觉分镜模型。只返回完整 JSON。根据完整内容任务设计每张图的构图、光线、场景、文字和信息模块，sectionIndex必须对应规划从0开始的下标。plan.sections[].copy 是内容基础，可以自然润色标题、调整句式、标点和换行，无需逐字复刻；保持完整买家信息、参数标签、数值、单位和尺寸表，不把完整页面简化成只有标题。不要删除页面，不要编造规格。每张最终prompt必须完整描述主体、镜头、环境、光线、配色、细节/信息模块与排版，最终可见文字以textBlocks为准；不能只写标题或依赖前一张图。按内容安排场景、微距、标注、信息图与规格表，避免所有页面同一背景加整件产品。`, input: JSON.stringify({ plan, expectedSectionCount: expected, sectionSlots, sectionIndexRule: "Return exactly one section per slot, with unique sectionIndex from 0 to expectedSectionCount - 1. Do not merge or omit slots.", platform: current.platform, language: input.language, userInstruction, referenceRoles, brief: input.xhsPromptPack?.brief }), images: visualImages, timeoutMs: Math.max(90000, Math.min(180000, expected * 15000)), maxAttempts: 1, requestId, monitor: { projectId, runId, operation: "v4_art_direction" } }).catch(error => { if (error instanceof z.ZodError) throw new InvalidStoryboard(`视觉分镜结构不合格，需要 ${expected} 张完整分镜。请确认后仅重试分镜，已完成规划会保留。`); throw error; }), result => { cp.artDirection = result; });
     const savedSections = await prisma.pageSection.findMany({ where: { projectId, sectionKey: { in: plan.sections.map((_, index) => `v4-${index}`) } }, orderBy: { order: "asc" } });
     const artIssue = storyboardIssue(art.sections, expected);
     if (artIssue) throw new InvalidStoryboard(artIssue);
@@ -551,7 +618,7 @@ async function executeV4(runId: string) {
       const upstreamTask = cp.requests![key]?.upstreamTask;
       const queryExisting = cp.requests![key]?.resultSource || (upstreamTask && upstreamTask.status !== "failed");
       if (cp.recoverImagesOnly && !queryExisting) return;
-      if (progress.state === "uncertain" && !queryExisting && (!cp.retryAuthorized?.includes(key) || progress.correctionCount >= 1)) return;
+      if (progress.state === "uncertain" && !queryExisting && !ktuMode && (!cp.retryAuthorized?.includes(key) || progress.correctionCount >= 1)) return;
       await lease.assertActive();
       if (progress.state === "uncertain" && !queryExisting) progress.correctionCount++;
       progress.state = "generating"; await persist(`GENERATE:${section.title}`);
@@ -601,7 +668,7 @@ async function executeV4(runId: string) {
       const art = cp.artDirection?.sections.find(s => s.sectionIndex === section?.order);
       try {
         const reviewImage = await imageData(progress.assetId!, projectId);
-        await requestOnce(`IMAGE_REVIEW:${progress.sectionId}${progress.redrawn ? ":redraw" : ""}`, requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.analysisModelId || input.planningModelId, schema: imageReviewSchema, system: ktuReview ? ktuReview.imageReview : `你是图片质检模型。只返回 JSON。如有 approvedPrompt，以其中用户确认的构图和画面文字为准，不要求恢复原分镜的措辞；商品事实仍须核对。检查商品一致性、事实准确性、排版可读性、构图和连续性，只报告实际问题。标题同义改写、标点和换行差异不算缺陷；不要逐字对照规划文案，关注事实、参数、完整信息和可读性。${confirmedAnswerCopyRules}缺少内部来源说明不算图片缺陷。`, input: ktuReview ? JSON.stringify({ title: section?.title, expectedText: art?.textBlocks.map(block => block.text).join("\n") || section?.copy || "", requirements: ktuReview.review.requirements }) : JSON.stringify({ approvedPrompt: cp.promptReview?.approvedAt ? sections.find(s => s.id === progress.sectionId)?.visualPrompt : undefined, section: sections.find(s => s.id === progress.sectionId)?.title, plan: cp.plan, art: cp.artDirection?.sections.find(s => s.sectionIndex === sections.find(s => s.id === progress.sectionId)?.order) }), images: [reviewImage], timeoutMs: 45000, maxAttempts: 1, requestId, monitor: { projectId, sectionId: progress.sectionId, runId, operation: "v4_image_review" } }), review => {
+        await requestOnce(`IMAGE_REVIEW:${progress.sectionId}${progress.redrawn ? ":redraw" : ""}`, requestId => invokeStructured({ ...textSettings(input.providerSnapshot || {}), apiKey, baseUrl: provider.baseUrl, model: input.analysisModelId || input.planningModelId, schema: imageReviewSchema, system: ktuReview ? ktuReview.imageReview : `你是图片质检模型。只返回 JSON。如有 approvedPrompt，以其中用户确认的构图和画面文字为准，不要求恢复原分镜的措辞；商品事实仍须核对。检查商品一致性、事实准确性、排版可读性、构图和连续性，只报告实际问题。标题同义改写、标点和换行差异不算缺陷；不要逐字对照规划文案，关注事实、参数、完整信息和可读性。${confirmedAnswerCopyRules}缺少内部来源说明不算图片缺陷。`, input: ktuReview ? JSON.stringify({ title: section?.title, expectedText: art?.textBlocks.map(block => block.text).join("\n") || section?.copy || "", requirements: ktuReview.review.requirements }) : JSON.stringify({ approvedPrompt: cp.promptReview?.approvedAt ? sections.find(s => s.id === progress.sectionId)?.visualPrompt : undefined, section: sections.find(s => s.id === progress.sectionId)?.title, plan: cp.plan, art: cp.artDirection?.sections.find(s => s.sectionIndex === sections.find(s => s.id === progress.sectionId)?.order) }), images: [reviewImage], timeoutMs: ktuReview ? 120000 : 45000, maxAttempts: 1, requestId, monitor: { projectId, sectionId: progress.sectionId, runId, operation: "v4_image_review" } }), review => {
           const result = { ...review, passed: review.passed && !review.issues.some(issue => issue.severity === "error") };
           progress.check = result; progress.state = "checked"; cp.imageReviews[progress.sectionId] = result;
         });
@@ -679,14 +746,15 @@ async function executeV4(runId: string) {
       }
       await end("SET_REVIEW");
     }
-    const complete = reviewOff ? cp.images.length > 0 && cp.images.every(image => image.assetId) : checksComplete(cp);
+    // K图：图都画出来就算完成；检查没通过的图在作品页标「需检查」，检查没跑完不影响完成。
+    const complete = ktuMode ? cp.images.length > 0 && cp.images.every(image => image.assetId) : checksComplete(cp);
     const reviewPending = !reviewOff && (cp.images.some(image => image.assetId && !image.check) || !cp.setReview);
     cp.retryAuthorized = [];
     if (complete || hasResolvedReviewError(cp)) cp.lastError = undefined;
     cp.stage = complete ? "COMPLETED" : "PARTIAL";
     cp.taskTiming = touchTiming(cp.taskTiming!, true);
     await lease.transaction(async tx => { await tx.detailRun.update({ where: { id: runId }, data: {
-      status: complete ? "COMPLETED" : "PARTIAL", stage: complete ? (reviewOff ? "生成已完成" : "生成与检查已完成") : cp.images.some(image => !image.assetId) ? "部分图片未完成，已保留成功结果" : reviewPending ? "图片已生成，质量检查未完成" : "图片已生成，部分需人工检查",
+      status: complete ? "COMPLETED" : "PARTIAL", stage: complete ? (ktuMode ? "生成已完成" : "生成与检查已完成") : cp.images.some(image => !image.assetId) ? "部分图片未完成，已保留成功结果" : reviewPending ? "图片已生成，质量检查未完成" : "图片已生成，部分需人工检查",
       error: cp.lastError?.message ?? null, checkpoint: json(cp),
     } }); });
   } catch (error) {

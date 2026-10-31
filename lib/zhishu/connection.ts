@@ -11,7 +11,8 @@ import {
 
 export { zhishuCredentials } from "./connection-file";
 
-// 接入地址固定，不提供修改入口；ZHISHU_CONNECT_URL 只给本地测试用
+// 接入地址固定，不提供修改入口；ZHISHU_CONNECT_URL 只给本地测试用。
+// 请求网站一律 cache: "no-store"：这些都在 GET 接口里调用，不写的话 Next 会把结果缓存住，版本、授权状态、余额就不更新了。
 const CONNECT_URL = process.env.ZHISHU_CONNECT_URL?.trim() || "https://zhishuhub.com/api/apps/connect";
 export const ZHISHU_PROVIDER_ID = "zhishu-managed";
 
@@ -67,7 +68,7 @@ export async function ensureZhishuProvider() {
 async function tokenRevoked(connection: ZhishuConnection) {
   let response: Response;
   try {
-    response = await fetch(`${normalizedBaseUrl(connection)}/models`, { headers: { Authorization: `Bearer ${connection.api_key}` }, signal: AbortSignal.timeout(10_000) });
+    response = await fetch(`${normalizedBaseUrl(connection)}/models`, { headers: { Authorization: `Bearer ${connection.api_key}` }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
   } catch {
     return false;
   }
@@ -92,7 +93,7 @@ export async function connectZhishu(rawCode: string): Promise<ZhishuStatus> {
   if (!match) return status(loadZhishuConnection(), "没有识别到接入码，请回到网站重新点「一键接入」");
   let response: Response;
   try {
-    response = await fetch(CONNECT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ app_id: ZHISHU_APP_KEY, code: match[0] }), signal: AbortSignal.timeout(20_000) });
+    response = await fetch(CONNECT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ app_id: ZHISHU_APP_KEY, code: match[0] }), cache: "no-store", signal: AbortSignal.timeout(20_000) });
   } catch {
     return status(loadZhishuConnection(), "网络异常，请检查网络后重试");
   }
@@ -111,12 +112,28 @@ export function disconnectZhishu(): ZhishuStatus {
   return status(null);
 }
 
+/** 账户剩余额度（按网站的显示方式，如「¥12.35」）；没接入、网站还没有这个接口或查不到时返回空，界面就不显示。 */
+export async function getZhishuBalance() {
+  const connection = loadZhishuConnection();
+  if (!connection) return "";
+  try {
+    const response = await fetch(`${siteOrigin(connection, CONNECT_URL)}/api/apps/connect/balance`, {
+      method: "POST", headers: { Authorization: `Bearer ${connection.api_key}`, "Content-Type": "application/json" }, body: "{}", cache: "no-store", signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return "";
+    const result = await response.json() as { success?: boolean; data?: { display?: unknown } };
+    return result.success && typeof result.data?.display === "string" ? result.data.display.slice(0, 40) : "";
+  } catch {
+    return "";
+  }
+}
+
 /** 网站上本应用的最新版本号（公开接口），取不到返回空。子站用户查自己所在的网站，不引到主站。 */
 export async function getLatestAppVersion() {
   const connection = loadZhishuConnection();
   if (!connection) return "";
   try {
-    const response = await fetch(`${siteOrigin(connection, CONNECT_URL)}/api/apps/${ZHISHU_APP_KEY}`, { signal: AbortSignal.timeout(10_000) });
+    const response = await fetch(`${siteOrigin(connection, CONNECT_URL)}/api/apps/${ZHISHU_APP_KEY}`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
     const result = await response.json() as { success?: boolean; data?: { version?: string } };
     return result.success ? String(result.data?.version ?? "") : "";
   } catch {

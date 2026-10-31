@@ -45,10 +45,10 @@ export default function RootLayout({
         <ChunkReloadGuard />
         {!ZHISHU_MANAGED_AI && <BrandConsole />}
         {!ZHISHU_MANAGED_AI && <ProviderCredentialFetchBridge />}
+        {/* K图的进度都在生成记录里，不挂原项目的任务队列浮窗 */}
         {ZHISHU_MANAGED_AI ? <ZhishuGate>
           <ImagePreviewProvider>
             <AppShell>{children}</AppShell>
-            <TaskQueue />
             <BackToTopButton />
           </ImagePreviewProvider>
         </ZhishuGate> : <ImagePreviewProvider>

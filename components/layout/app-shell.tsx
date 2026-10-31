@@ -6,6 +6,7 @@ import { Bot, BookOpenText, CalendarClock, FolderKanban, History, Languages, Lay
 
 import { ApiStatusIndicator } from "@/components/layout/api-status-indicator";
 import { ZhishuBadge } from "@/components/zhishu/zhishu-badge";
+import { KtuHeaderStatus } from "@/components/ktu/ktu-header-status";
 import { ZHISHU_MANAGED_AI } from "@/lib/zhishu/managed";
 import { UserMenu } from "@/components/layout/user-menu";
 import { SettingsNav } from "@/components/settings/settings-nav";
@@ -89,7 +90,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main className="min-w-0 rounded-[2rem] border border-border bg-card p-5 shadow-soft md:ml-[19.5rem] md:p-8">
           <div className="mb-6 flex min-w-0 items-center justify-between gap-3 md:justify-end">
             <div className="shrink-0 md:hidden"><UserMenu compact /></div>
-            {ZHISHU_MANAGED_AI ? <ZhishuBadge /> : <ApiStatusIndicator />}
+            {ZHISHU_MANAGED_AI ? <div className="flex flex-wrap items-center justify-end gap-2"><KtuHeaderStatus /><ZhishuBadge /></div> : <ApiStatusIndicator />}
           </div>
           {isSettings ? <div className="mb-6 border-b border-border pb-4 md:hidden"><SettingsNav mobile /></div> : <nav aria-label="移动端主导航" className="mb-6 flex flex-wrap gap-2 border-b border-border pb-4 md:hidden">
             {navItems.map(({ href, label, icon: Icon }) => (

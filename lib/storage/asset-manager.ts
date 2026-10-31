@@ -174,6 +174,12 @@ export async function deleteAssetRecord(assetId: string) {
   return asset;
 }
 
+/** 删除作品后一并删掉它的上传、生成和导出文件（导出到用户自选文件夹里的不动）。 */
+export async function removeProjectFiles(projectId: string) {
+  if (!/^[\w-]+$/.test(projectId)) return;
+  await Promise.all((["uploads", "generated", "exports"] as const).map(kind => fs.rm(projectDir(projectId, kind), { recursive: true, force: true })));
+}
+
 export function assetPublicUrl(asset: Pick<ProductAsset, "filePath"> | null | undefined) {
   if (!asset) {
     return null;

@@ -46,7 +46,7 @@ Prioritize the user's explicit style. Keep one dominant visual and a clear readi
 The page-specific composition may vary, but the series visual system stays fixed.`;
 
 // K图的任务带 ktu：四段提示词换成 lib/ktu/prompts.ts 里的抖音商K版本，另带检查开关和检查要求。
-export type KtuPackExtras = { review: { enabled: boolean; requirements: string }; imageReview: string; setReview: string };
+export type KtuPackExtras = { review: { enabled: boolean; requirements: string }; imageReview: string; setReview: string; compose?: string };
 export type XhsPromptPack = { version: 1; brief: string; planning: string; artDirection: string; render: string; platformName?: string; aspect?: "3:4" | "9:16"; ktu?: KtuPackExtras };
 
 export function createXhsPromptPack(brief: string): XhsPromptPack {

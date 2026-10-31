@@ -16,14 +16,17 @@ export async function claimRunLease(runId: string) {
   if (!claimed.count) return null;
   let lost = false;
   let heartbeatBusy = false;
+  let heartbeatFailures = 0;
   let heartbeatWrite = Promise.resolve();
   const owner = (allowCanceled = false) => ({ id: runId, leaseToken: token, leaseUntil: { gt: new Date() }, status: { in: allowCanceled ? ["RUNNING", "CANCELED"] : ["RUNNING"] } });
   const timer = setInterval(() => {
     if (heartbeatBusy || lost) return;
     heartbeatBusy = true;
     heartbeatWrite = prisma.detailRun.updateMany({ where: owner(true), data: { leaseUntil: until() } })
-      .then(result => { if (!result.count) lost = true; })
-      .catch(() => { lost = true; }) // Fail closed: a worker unable to renew must not dispatch more work.
+      .then(result => { heartbeatFailures = 0; if (!result.count) lost = true; })
+      // A busy local database can reject one write while several runs save progress. Fail closed only
+      // after three misses in a row, still well inside the lease, so no other worker can take over first.
+      .catch(() => { if (++heartbeatFailures >= 3) lost = true; })
       .finally(() => { heartbeatBusy = false; });
   }, RUN_HEARTBEAT_MS);
   timer.unref?.();

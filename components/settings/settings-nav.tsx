@@ -6,7 +6,7 @@ import { ArrowLeft, ChartNoAxesCombined, Info, Palette, Settings2, ShieldCheck, 
 import { cn } from "@/lib/utils";
 import { ZHISHU_MANAGED_AI } from "@/lib/zhishu/managed";
 
-// K图：「API 配置」换成「AI 服务」，多一项「出图检查」；Agent 设置和 API 监控不显示。
+// K图：「API 配置」换成「AI 服务」，多一项「生成设置」（同时生成几套、自动导出、出图检查）；Agent 设置和 API 监控不显示。
 const hiddenWhenManaged = ["/settings/agent", "/monitor/usage"];
 const managedOnly = ["/settings/review"];
 
@@ -17,7 +17,7 @@ export function SettingsNav({ mobile = false }: { mobile?: boolean }) {
     {[
       { href: "/settings/profile", label: "个人资料", icon: UserRound },
       { href: "/settings/providers", label: ZHISHU_MANAGED_AI ? "AI 服务" : "API 配置", icon: Settings2 },
-      { href: "/settings/review", label: "出图检查", icon: ShieldCheck },
+      { href: "/settings/review", label: "生成设置", icon: ShieldCheck },
       { href: "/settings/agent", label: "Agent 设置", icon: Settings2 },
       { href: "/settings/data", label: "数据管理", icon: Settings2 },
       { href: "/monitor/usage", label: "API 监控", icon: ChartNoAxesCombined },

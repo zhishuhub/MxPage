@@ -62,3 +62,13 @@ export async function exportJob(jobId: string, baseDir?: string) {
   await prisma.ktuJob.update({ where: { id: jobId }, data: { exportedPath: dir } });
   return { dir, needsCheck: notes.length > 0 };
 }
+
+/** 批量导出：每套照常按「日期 / 城市 / 模板」分文件夹；还没有图的跳过。 */
+export async function exportJobs(ids: string[], baseDir?: string) {
+  let exported = 0;
+  let skipped = 0;
+  for (const id of ids) {
+    try { await exportJob(id, baseDir); exported++; } catch { skipped++; }
+  }
+  return { exported, skipped, dir: baseDir?.trim() || defaultOutputDir() };
+}

@@ -4,6 +4,7 @@ const path = require("path");
 const { app, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray } = require("electron");
 
 const TICK_INTERVAL_MS = 30_000;
+const BUSY_TICK_INTERVAL_MS = 5_000;
 const HIDDEN_ARG = "--hidden";
 
 function settingsPath() {
@@ -101,32 +102,43 @@ function createKtuDesktop({ getWindow, getServerUrl, showWindow, iconPath, trayI
     });
   }
 
+  /** 推进一次，返回还有没有批次在跑。 */
   async function tick() {
     const serverUrl = getServerUrl();
-    if (!serverUrl) return;
+    if (!serverUrl) return false;
     try {
       const response = await fetch(`${serverUrl}/api/ktu/scheduler/tick`, { method: "POST", signal: AbortSignal.timeout(120_000) });
       const payload = await response.json();
       for (const item of payload?.data?.notifications ?? []) {
         if (!Notification.isSupported()) break;
         const notice = new Notification({ title: item.title, body: item.body, icon: iconPath });
-        notice.on("click", () => showWindow("/ktu/schedules"));
+        notice.on("click", () => showWindow(typeof item.href === "string" && item.href.startsWith("/ktu") ? item.href : "/ktu/schedules"));
         notice.show();
       }
+      return payload?.data?.busy === true;
     } catch {
       // 本地服务忙或刚启动，下一轮再推
+      return false;
     }
+  }
+
+  // 有批次在跑时 5 秒推进一次（一套跑完马上补开下一套），空闲时 30 秒
+  let stopped = false;
+  async function loop() {
+    const busy = await tick();
+    if (!stopped) timer = setTimeout(() => void loop(), busy ? BUSY_TICK_INTERVAL_MS : TICK_INTERVAL_MS);
   }
 
   function start() {
     setupTray();
     applyAutoLaunch();
-    void tick();
-    timer = setInterval(() => void tick(), TICK_INTERVAL_MS);
+    stopped = false;
+    void loop();
   }
 
   function stop() {
-    if (timer) clearInterval(timer);
+    stopped = true;
+    if (timer) clearTimeout(timer);
     timer = null;
     tray?.destroy();
     tray = null;

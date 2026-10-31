@@ -447,5 +447,7 @@ model KtuSetting {
   id                 String   @id @default("default")
   reviewEnabled      Boolean  @default(true)
   reviewRequirements String   @default("")
+  concurrency        Int      @default(3)
+  autoExport         Boolean  @default(false)
   updatedAt          DateTime @updatedAt
 }

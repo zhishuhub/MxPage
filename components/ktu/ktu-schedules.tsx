@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { KTU_TIERS, tierLabel } from "@/lib/ktu/catalog";
 import { cn } from "@/lib/utils";
 import { api, desktopBridge, formatTime, useSchedulerTick } from "./api";
+import { KtuCityPicker } from "./ktu-city-picker";
 import { RUN_STATUS_LABEL, type KtuCityView, type KtuTemplateView } from "./types";
 
 type ScheduleView = {
@@ -116,7 +117,7 @@ function ScheduleEditor({ initial, cities, templates, defaultOutputDir, onSave, 
       <p className="text-sm font-medium">城市范围</p>
       <div className="flex flex-wrap gap-2">{[["all", "全部城市"], ["tiers", "按城市等级"], ["cities", "指定城市"]].map(([value, label]) => <button key={value} type="button" className={chip(form.scope === value)} onClick={() => set({ scope: value })}>{label}</button>)}</div>
       {form.scope === "tiers" && <div className="flex flex-wrap gap-2">{KTU_TIERS.map(tier => <button key={tier.key} type="button" className={chip(form.tiers.includes(tier.key))} onClick={() => set({ tiers: toggle(form.tiers, tier.key) })}>{tier.label}</button>)}</div>}
-      {form.scope === "cities" && <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">{cities.map(city => <button key={city.id} type="button" className={chip(form.cityIds.includes(city.id))} onClick={() => set({ cityIds: toggle(form.cityIds, city.id) })}>{city.name}</button>)}</div>}
+      {form.scope === "cities" && <div className="max-h-80 overflow-y-auto pr-1"><KtuCityPicker cities={cities} value={form.cityIds} onChange={ids => set({ cityIds: ids })} showCounts={false} /></div>}
     </div>
 
     <div className="space-y-2">

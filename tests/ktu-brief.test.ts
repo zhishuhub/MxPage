@@ -91,10 +91,12 @@ test("compliance check flags suggestive words, absolute claims and contact detai
 });
 
 test("k-tu prompt pack is written for douyin business KTV and carries the review switch", () => {
-  const pack = createKtuPromptPack("x", { aspect: "9:16", pageCount: 5, review: { reviewEnabled: false, reviewRequirements: "店名不能错" } });
-  const all = `${pack.planning}${pack.artDirection}${pack.render}${pack.ktu!.imageReview}${pack.ktu!.setReview}`;
+  const pack = createKtuPromptPack("x", { aspect: "9:16", pageCount: 5, review: { reviewEnabled: false, reviewRequirements: "店名不能错", concurrency: 3, autoExport: false } });
+  const all = `${pack.planning}${pack.artDirection}${pack.render}${pack.ktu!.imageReview}${pack.ktu!.setReview}${pack.ktu!.compose}`;
   assert.doesNotMatch(all, /小红书|Xiaohongshu|淘宝|电商|商品|详情页|风格库|3:4|1080×1440/);
   assert.match(pack.planning, /恰好 5 张/);
+  assert.match(pack.ktu!.compose!, /恰好 5 张/);
+  assert.match(pack.ktu!.compose!, /1080×1920/);
   assert.match(pack.render, /strict 9:16/);
   assert.match(pack.artDirection, /1080×1920/);
   assert.deepEqual(pack.ktu!.review, { enabled: false, requirements: "店名不能错" });
